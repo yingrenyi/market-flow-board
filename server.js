@@ -739,6 +739,38 @@ async function buildUsFocusPayload() {
   };
 }
 
+async function buildUsFocusQuotePayload() {
+  const [quotes, yahooQuotes] = await Promise.all([
+    fetchUsFocusQuotes().catch(() => new Map()),
+    fetchYahooUsFocusQuotes().catch(() => new Map())
+  ]);
+
+  const items = US_FOCUS_TARGETS.map((target) => {
+    const quote = target.code
+      ? normalizeUsFocusQuote(target, quotes.get(target.code)) || normalizeYahooUsFocusQuote(target, yahooQuotes.get(target.code))
+      : null;
+    const proxyQuotes = (target.proxies || [])
+      .map((proxy) => normalizeUsFocusQuote(proxy, quotes.get(proxy.code)) || normalizeYahooUsFocusQuote(proxy, yahooQuotes.get(proxy.code)))
+      .filter(Boolean);
+
+    return {
+      id: target.id,
+      code: target.code || null,
+      quote,
+      proxies: proxyQuotes
+    };
+  });
+
+  return {
+    market: "us",
+    source: "东方财富美股行情 / Yahoo Finance 备用",
+    generatedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    refreshIntervalSeconds: 15,
+    items
+  };
+}
+
 async function fetchYahooOptionsSummary(symbol) {
   const upperSymbol = String(symbol || "").trim().toUpperCase();
   if (!upperSymbol) return null;
@@ -1640,6 +1672,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (reqUrl.pathname === "/api/us") {
       sendJson(response, 200, await buildUsPayload());
+      return;
+    }
+    if (reqUrl.pathname === "/api/us-focus-quotes") {
+      sendJson(response, 200, await buildUsFocusQuotePayload());
       return;
     }
     if (reqUrl.pathname === "/api/us-focus") {

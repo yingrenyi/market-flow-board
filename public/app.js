@@ -20,9 +20,13 @@ const state = {
   },
   usFocus: {
     loading: false,
+    quoteLoading: false,
     error: null,
+    quoteError: null,
     data: null,
-    timer: null
+    timer: null,
+    quoteTimer: null,
+    quoteUpdatedAt: null
   },
   decision: {
     activeView: "persistence"
@@ -413,6 +417,7 @@ function setMarket(market) {
     loadUsFocus(true);
   } else {
     window.clearTimeout(state.usFocus.timer);
+    window.clearTimeout(state.usFocus.quoteTimer);
     renderUsFocusPanel();
   }
 }
@@ -423,6 +428,7 @@ function toggleAutoRefresh() {
   els.autoButton.title = state.autoRefresh ? "暂停自动刷新" : "开启自动刷新";
   scheduleRefresh();
   scheduleUsFocusRefresh();
+  scheduleUsFocusQuoteRefresh();
 }
 
 async function loadMarket(market, force = false) {
@@ -527,12 +533,15 @@ async function loadUsFocus(force = false) {
     const query = force ? `?force=1&_=${Date.now()}` : `?_=${Date.now()}`;
     const data = await fetchApiJson(`/api/us-focus${query}`);
     state.usFocus.data = await hydrateUsFocusWithDirectQuotes(data);
+    state.usFocus.quoteUpdatedAt = state.usFocus.data?.quoteUpdatedAt || state.usFocus.data?.updatedAt || new Date().toISOString();
+    state.usFocus.quoteError = null;
   } catch (error) {
     state.usFocus.error = error.message;
   } finally {
     state.usFocus.loading = false;
     renderUsFocusPanel();
     scheduleUsFocusRefresh();
+    scheduleUsFocusQuoteRefresh();
   }
 }
 
@@ -540,6 +549,43 @@ function scheduleUsFocusRefresh() {
   window.clearTimeout(state.usFocus.timer);
   if (state.market !== "us" || !state.autoRefresh) return;
   state.usFocus.timer = window.setTimeout(() => loadUsFocus(), 60 * 1000);
+}
+
+async function loadUsFocusQuotes(force = false) {
+  if (state.market !== "us" || !state.usFocus.data) return;
+  if (state.usFocus.quoteLoading && !force) return;
+  state.usFocus.quoteLoading = true;
+  state.usFocus.quoteError = null;
+
+  try {
+    let quoteData = null;
+    try {
+      quoteData = await fetchApiJson(`/api/us-focus-quotes?_=${Date.now()}`);
+      if (!hasUsFocusQuotes(quoteData)) {
+        quoteData = await buildDirectUsFocusQuotePayload();
+      }
+    } catch {
+      quoteData = await buildDirectUsFocusQuotePayload();
+    }
+    state.usFocus.data = mergeUsFocusQuoteData(state.usFocus.data, quoteData);
+    state.usFocus.quoteUpdatedAt = quoteData.updatedAt || new Date().toISOString();
+  } catch (error) {
+    state.usFocus.quoteError = error.message;
+  } finally {
+    state.usFocus.quoteLoading = false;
+    renderUsFocusPanel();
+    scheduleUsFocusQuoteRefresh();
+  }
+}
+
+function hasUsFocusQuotes(quoteData) {
+  return Boolean(quoteData?.items?.some((item) => item.quote || item.proxies?.length));
+}
+
+function scheduleUsFocusQuoteRefresh() {
+  window.clearTimeout(state.usFocus.quoteTimer);
+  if (state.market !== "us" || !state.autoRefresh || !state.usFocus.data) return;
+  state.usFocus.quoteTimer = window.setTimeout(() => loadUsFocusQuotes(), 15 * 1000);
 }
 
 function scheduleHotspotsRefresh() {
@@ -1151,6 +1197,51 @@ async function fetchDirectUsFocusQuotes() {
   return new Map((json.data?.diff || []).map((row) => [String(row.f12), row]));
 }
 
+async function buildDirectUsFocusQuotePayload() {
+  const quoteMap = await fetchDirectUsFocusQuotes();
+  return {
+    market: "us",
+    source: "东方财富美股行情（浏览器直连）",
+    generatedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    refreshIntervalSeconds: 15,
+    items: DIRECT_US_FOCUS_TARGETS.map((target) => ({
+      id: target.id,
+      code: target.code,
+      quote: normalizeDirectUsFocusQuote(target, quoteMap.get(target.code)),
+      proxies: (target.proxies || [])
+        .map((proxy) => normalizeDirectUsFocusQuote(proxy, quoteMap.get(proxy.code)))
+        .filter(Boolean)
+    }))
+  };
+}
+
+function mergeUsFocusQuoteData(currentData, quoteData) {
+  if (!currentData?.items?.length || !quoteData?.items?.length) return currentData;
+  const quoteById = new Map(quoteData.items.map((item) => [item.id, item]));
+  const items = currentData.items.map((item) => {
+    const fresh = quoteById.get(item.id);
+    if (!fresh) return item;
+    const quote = fresh.quote || item.quote;
+    const proxies = fresh.proxies?.length ? fresh.proxies : item.proxies;
+    const heat = quote ? calcDirectUsFocusHeat(item, quote, proxies || []) : item.heat;
+    return {
+      ...item,
+      quote,
+      proxies,
+      heat,
+      reason: quote ? makeDirectUsFocusReason(item, quote, proxies || []) : item.reason,
+      action: quote ? makeDirectUsFocusAction(quote, proxies || [], heat, item.newsScore) : item.action
+    };
+  });
+  return {
+    ...currentData,
+    quoteUpdatedAt: quoteData.updatedAt || new Date().toISOString(),
+    quoteSource: quoteData.source || currentData.quoteSource,
+    items
+  };
+}
+
 function normalizeDirectUsFocusQuote(target, row) {
   if (!row) return null;
   return {
@@ -1455,12 +1546,13 @@ function renderUsFocusPanel() {
   els.usFocusPanel.hidden = false;
   const view = state.usFocus;
   const data = view.data;
+  const quoteUpdatedAt = view.quoteUpdatedAt || data?.quoteUpdatedAt || data?.updatedAt;
   const status = view.loading
     ? "更新中"
     : view.error
       ? "数据异常"
-      : data?.updatedAt
-        ? `${formatRelativeTime(data.updatedAt)}更新`
+      : quoteUpdatedAt
+        ? `价格${formatRelativeTime(quoteUpdatedAt)} · 分析${formatRelativeTime(data?.updatedAt)}`
         : "等待数据";
 
   if (!data && view.loading) {
@@ -1479,8 +1571,9 @@ function renderUsFocusPanel() {
     : `<div class="us-focus-empty">暂无重点公司数据</div>`;
   const foot = `
     <div class="us-focus-foot">
-      ${escapeHtml(data?.note || "美股重点公司使用行情与快讯综合观察。")}
+      ${escapeHtml(data?.note || "美股重点公司使用行情与快讯综合观察。")} · 股价约15秒轻量刷新
       ${view.error ? ` · ${escapeHtml(view.error)}` : ""}
+      ${view.quoteError ? ` · 报价刷新异常：${escapeHtml(view.quoteError)}` : ""}
     </div>
   `;
 
