@@ -677,6 +677,22 @@ async function buildUsFocusPayload() {
     fetchYahooUsFocusQuotes().catch(() => new Map()),
     fetchEastmoneyFastNewsCorpus().catch(() => [])
   ]);
+  const optionsResults = await mapLimit(US_FOCUS_TARGETS, 2, async (target) => {
+    if (!target.code) return [target.id, null];
+    try {
+      return [target.id, await fetchOptionsSummary(target.code)];
+    } catch (error) {
+      return [
+        target.id,
+        {
+          symbol: target.code,
+          source: "Yahoo Finance / Cboe options",
+          error: error.message || "options unavailable"
+        }
+      ];
+    }
+  });
+  const optionsByTarget = new Map(optionsResults);
   const maxAmount = Math.max(
     1,
     ...[...quotes.values()].map((row) => safeNumber(row.f6)),
@@ -693,6 +709,7 @@ async function buildUsFocusPayload() {
     const news = filterFocusNews(newsCorpus, target).slice(0, 5);
     const positiveNews = news.filter((item) => item.sentiment?.tone === "positive").length;
     const negativeNews = news.filter((item) => item.sentiment?.tone === "negative").length;
+    const options = optionsByTarget.get(target.id) || null;
     const heat = calcUsFocusHeat({ quote, proxyQuotes, news, positiveNews, negativeNews, maxAmount });
     return {
       id: target.id,
@@ -703,21 +720,172 @@ async function buildUsFocusPayload() {
       quote,
       proxies: proxyQuotes,
       news,
+      options,
+      reason: makeUsFocusMoveReason({ target, quote, proxyQuotes, news, positiveNews, negativeNews, options }),
       heat,
       newsScore: positiveNews - negativeNews,
-      action: makeUsFocusAction({ target, quote, proxyQuotes, heat, positiveNews, negativeNews })
+      action: makeUsFocusAction({ target, quote, proxyQuotes, heat, positiveNews, negativeNews, options })
     };
   });
 
   return {
     market: "us",
     title: "美股重点观察",
-    source: "东方财富美股行情 / Yahoo Finance 备用 + 东方财富快讯",
+    source: "东方财富美股行情 / Yahoo Finance 备用 + 东方财富快讯 + Yahoo/Cboe 期权链",
     generatedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    note: "SPCX、MU、NVDA、INTC 优先使用东方财富美股行情；取不到时使用 Yahoo Finance 报价，成交额按价格乘成交量估算。",
+    note: "SPCX、MU、NVDA、INTC 优先使用东方财富美股行情；取不到时使用 Yahoo Finance 报价。期权比例用 Yahoo/Cboe 公开 Call/Put 成交量或未平仓量估算，公开数据无法区分买卖方向。",
     items
   };
+}
+
+async function fetchYahooOptionsSummary(symbol) {
+  const upperSymbol = String(symbol || "").trim().toUpperCase();
+  if (!upperSymbol) return null;
+  const json = await fetchRawJson(`https://query1.finance.yahoo.com/v7/finance/options/${encodeURIComponent(upperSymbol)}`, 5 * 60 * 1000, {
+    "accept": "application/json,text/plain,*/*",
+    "user-agent": REQUEST_HEADERS["user-agent"]
+  });
+  const result = json.optionChain?.result?.[0];
+  const chain = result?.options?.[0];
+  if (!chain) return null;
+  return summarizeYahooOptions(upperSymbol, result, chain);
+}
+
+async function fetchOptionsSummary(symbol) {
+  try {
+    const yahoo = await fetchYahooOptionsSummary(symbol);
+    if (yahoo && !yahoo.error) return yahoo;
+  } catch {
+    // Cboe delayed quotes are the operational fallback when Yahoo blocks options.
+  }
+  return fetchCboeOptionsSummary(symbol);
+}
+
+async function fetchCboeOptionsSummary(symbol) {
+  const upperSymbol = String(symbol || "").trim().toUpperCase();
+  if (!upperSymbol) return null;
+  const json = await fetchRawJson(`https://cdn.cboe.com/api/global/delayed_quotes/options/${encodeURIComponent(upperSymbol)}.json`, 5 * 60 * 1000, {
+    "accept": "application/json,text/plain,*/*",
+    "user-agent": REQUEST_HEADERS["user-agent"]
+  });
+  const options = json.data?.options || [];
+  if (!options.length) return null;
+  return summarizeCboeOptions(upperSymbol, json.timestamp, options);
+}
+
+function summarizeYahooOptions(symbol, result, chain) {
+  const calls = chain.calls || [];
+  const puts = chain.puts || [];
+  const callVolume = sumOptionField(calls, "volume");
+  const putVolume = sumOptionField(puts, "volume");
+  const callOpenInterest = sumOptionField(calls, "openInterest");
+  const putOpenInterest = sumOptionField(puts, "openInterest");
+  const volumeTotal = callVolume + putVolume;
+  const oiTotal = callOpenInterest + putOpenInterest;
+  const useVolume = volumeTotal > 0;
+  const denominator = useVolume ? volumeTotal : oiTotal;
+
+  if (denominator <= 0) {
+    return {
+      symbol,
+      source: "Yahoo Finance options",
+      expirationDate: unixSecondsToMs(chain.expirationDate || result.expirationDates?.[0] || 0),
+      basis: null,
+      error: "暂无期权成交量或未平仓量"
+    };
+  }
+
+  const callBase = useVolume ? callVolume : callOpenInterest;
+  const putBase = useVolume ? putVolume : putOpenInterest;
+  const callBullishPct = (callBase / denominator) * 100;
+  const putBearishPct = (putBase / denominator) * 100;
+  const putCallRatio = callBase > 0 ? putBase / callBase : null;
+  const tone = callBullishPct >= 60 ? "positive" : putBearishPct >= 60 ? "negative" : "neutral";
+  const label = callBullishPct >= 60 ? "Call占优" : putBearishPct >= 60 ? "Put占优" : "多空均衡";
+
+  return {
+    symbol,
+    source: "Yahoo Finance options",
+    expirationDate: unixSecondsToMs(chain.expirationDate || result.expirationDates?.[0] || 0),
+    basis: useVolume ? "成交量" : "未平仓量",
+    callBullishPct,
+    putBearishPct,
+    putCallRatio,
+    callVolume,
+    putVolume,
+    callOpenInterest,
+    putOpenInterest,
+    label,
+    tone
+  };
+}
+
+function summarizeCboeOptions(symbol, timestamp, options) {
+  const calls = options.filter((option) => parseCboeOptionType(symbol, option.option) === "C");
+  const puts = options.filter((option) => parseCboeOptionType(symbol, option.option) === "P");
+  const callVolume = sumOptionField(calls, "volume");
+  const putVolume = sumOptionField(puts, "volume");
+  const callOpenInterest = sumOptionField(calls, "open_interest");
+  const putOpenInterest = sumOptionField(puts, "open_interest");
+  const volumeTotal = callVolume + putVolume;
+  const oiTotal = callOpenInterest + putOpenInterest;
+  const useVolume = volumeTotal > 0;
+  const denominator = useVolume ? volumeTotal : oiTotal;
+
+  if (denominator <= 0) {
+    return {
+      symbol,
+      source: "Cboe delayed options",
+      updatedAt: formatCboeTimestamp(timestamp),
+      basis: null,
+      error: "暂无期权成交量或未平仓量"
+    };
+  }
+
+  const callBase = useVolume ? callVolume : callOpenInterest;
+  const putBase = useVolume ? putVolume : putOpenInterest;
+  const callBullishPct = (callBase / denominator) * 100;
+  const putBearishPct = (putBase / denominator) * 100;
+  const putCallRatio = callBase > 0 ? putBase / callBase : null;
+  const tone = callBullishPct >= 60 ? "positive" : putBearishPct >= 60 ? "negative" : "neutral";
+  const label = callBullishPct >= 60 ? "Call占优" : putBearishPct >= 60 ? "Put占优" : "多空均衡";
+
+  return {
+    symbol,
+    source: "Cboe delayed options",
+    updatedAt: formatCboeTimestamp(timestamp),
+    basis: useVolume ? "成交量" : "未平仓量",
+    callBullishPct,
+    putBearishPct,
+    putCallRatio,
+    callVolume,
+    putVolume,
+    callOpenInterest,
+    putOpenInterest,
+    label,
+    tone
+  };
+}
+
+function parseCboeOptionType(symbol, value) {
+  const raw = String(value || "").toUpperCase();
+  const escaped = String(symbol || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = raw.match(new RegExp(`^${escaped}\\d{6}([CP])\\d+`));
+  return match?.[1] || "";
+}
+
+function formatCboeTimestamp(value) {
+  if (!value) return null;
+  const parsed = Date.parse(`${String(value).replace(" ", "T")}Z`);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function sumOptionField(options, field) {
+  return options.reduce((sum, option) => {
+    const value = safeNumber(option?.[field], 0);
+    return sum + Math.max(0, value);
+  }, 0);
 }
 
 function normalizeUsFocusQuote(target, row) {
@@ -793,7 +961,83 @@ function calcUsFocusHeat({ quote, proxyQuotes, news, positiveNews, negativeNews,
   return Math.round(Math.max(0, Math.min(99, 28 + amountScore + pctScore + newsScore + proxyScore)));
 }
 
-function makeUsFocusAction({ target, quote, proxyQuotes, heat, positiveNews, negativeNews }) {
+function makeUsFocusMoveReason({ quote, proxyQuotes, news, positiveNews, negativeNews, options }) {
+  const pct = safeNumber(quote?.pct, null);
+  const drivers = [];
+  let title = "等待行情和消息确认";
+  let tone = "neutral";
+
+  if (Number.isFinite(pct)) {
+    if (pct >= 3) {
+      title = "上涨可能由资金追涨和题材热度共同推动";
+      tone = "positive";
+      drivers.push(`日内涨幅 ${pct.toFixed(2)}%，短线交易强度偏高`);
+    } else if (pct >= 1) {
+      title = "小幅走强，偏板块或消息联动";
+      tone = "positive";
+      drivers.push(`日内涨幅 ${pct.toFixed(2)}%，趋势仍需成交量确认`);
+    } else if (pct <= -3) {
+      title = "下跌可能来自风险释放或获利回吐";
+      tone = "negative";
+      drivers.push(`日内跌幅 ${pct.toFixed(2)}%，先观察是否止跌`);
+    } else if (pct <= -1) {
+      title = "小幅走弱，偏正常波动或资金观望";
+      tone = "negative";
+      drivers.push(`日内跌幅 ${pct.toFixed(2)}%，卖压暂未明显扩散`);
+    } else {
+      title = "涨跌幅有限，更多是等待催化";
+      drivers.push("价格波动不大，暂未出现明确方向");
+    }
+  }
+
+  if (positiveNews > negativeNews) {
+    drivers.push(`相关快讯利好多于利空（${positiveNews}:${negativeNews}）`);
+  } else if (negativeNews > positiveNews) {
+    drivers.push(`相关快讯利空多于利好（${negativeNews}:${positiveNews}）`);
+  }
+
+  const optionDriver = makeOptionDriver(options);
+  if (optionDriver) drivers.push(optionDriver);
+
+  const proxyPct = averageNumbers(proxyQuotes.map((proxy) => safeNumber(proxy.pct, null)));
+  if (Number.isFinite(proxyPct) && Math.abs(proxyPct) >= 1) {
+    drivers.push(`相关标的平均${proxyPct >= 0 ? "上涨" : "下跌"} ${Math.abs(proxyPct).toFixed(2)}%`);
+  }
+
+  if (news[0]?.title) {
+    drivers.push(`最新线索：${truncateText(news[0].title, 38)}`);
+  }
+
+  return {
+    title,
+    tone,
+    drivers: drivers.length ? drivers.slice(0, 3) : ["暂无明确新闻触发，更多按成交和期权情绪观察"]
+  };
+}
+
+function makeOptionDriver(options) {
+  if (!options || options.error || !options.basis) return "";
+  if (safeNumber(options.callBullishPct) >= 60) {
+    return `期权${options.basis}中买 Call 看多占 ${safeNumber(options.callBullishPct).toFixed(0)}%`;
+  }
+  if (safeNumber(options.putBearishPct) >= 60) {
+    return `期权${options.basis}中 Put 防守/看空占 ${safeNumber(options.putBearishPct).toFixed(0)}%`;
+  }
+  return `期权${options.basis}多空接近均衡`;
+}
+
+function averageNumbers(values) {
+  const finite = values.filter(Number.isFinite);
+  if (!finite.length) return null;
+  return finite.reduce((sum, value) => sum + value, 0) / finite.length;
+}
+
+function truncateText(text, maxLength) {
+  const value = String(text || "");
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+}
+
+function makeUsFocusAction({ target, quote, proxyQuotes, heat, positiveNews, negativeNews, options }) {
   if (target.private) {
     if (positiveNews > negativeNews || heat >= 70) return "关注航天链，不能直接交易";
     return "仅跟踪新闻和代理标的";
@@ -802,9 +1046,11 @@ function makeUsFocusAction({ target, quote, proxyQuotes, heat, positiveNews, neg
   const pct = safeNumber(quote.pct);
   const amount = safeNumber(quote.amount);
   const proxyWeak = proxyQuotes.some((proxy) => safeNumber(proxy.pct) < -2);
+  const callDominant = safeNumber(options?.callBullishPct) >= 62;
+  const putDominant = safeNumber(options?.putBearishPct) >= 62;
   if (pct >= 4 && heat >= 75) return "强势但等回踩";
-  if (pct >= 1.5 && heat >= 65 && !proxyWeak) return "趋势跟踪";
-  if (pct < -3 || negativeNews > positiveNews + 1) return "等待企稳";
+  if (pct >= 1.5 && heat >= 65 && !proxyWeak && !putDominant) return callDominant ? "看多延续跟踪" : "趋势跟踪";
+  if (pct < -3 || negativeNews > positiveNews + 1 || (putDominant && pct < 0)) return "等待企稳";
   if (amount > 0 && heat >= 55) return "低吸观察";
   return "观察确认";
 }

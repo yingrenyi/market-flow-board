@@ -440,6 +440,108 @@ input {
   border-color: rgba(216, 116, 24, 0.24);
 }
 
+.us-focus-reason {
+  border: 1px solid rgba(217, 222, 213, 0.72);
+  background: rgba(255, 255, 255, 0.7);
+  padding: 7px 8px;
+}
+
+.us-focus-reason span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.us-focus-reason strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.us-focus-reason small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.us-focus-reason.positive strong {
+  color: var(--red);
+}
+
+.us-focus-reason.negative strong {
+  color: var(--green);
+}
+
+.us-focus-options {
+  border: 1px solid rgba(217, 222, 213, 0.72);
+  background: rgba(255, 255, 255, 0.74);
+  padding: 7px 8px;
+}
+
+.option-line,
+.option-split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.option-line span,
+.option-note {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.option-line strong {
+  font-size: 11px;
+}
+
+.option-bars {
+  height: 7px;
+  display: flex;
+  margin-top: 7px;
+  overflow: hidden;
+  border: 1px solid rgba(217, 222, 213, 0.72);
+  background: rgba(8, 116, 85, 0.08);
+}
+
+.option-bar.call {
+  background: var(--red);
+}
+
+.option-bar.put {
+  background: var(--green);
+}
+
+.option-split {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.us-focus-options.positive .option-line strong {
+  color: var(--red);
+}
+
+.us-focus-options.negative .option-line strong {
+  color: var(--green);
+}
+
+.us-focus-options.empty {
+  color: var(--muted);
+}
+
+.option-note {
+  margin-top: 4px;
+  font-weight: 400;
+}
+
 .us-focus-proxies {
   display: flex;
   flex-wrap: wrap;

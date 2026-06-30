@@ -1123,6 +1123,7 @@ async function hydrateUsFocusWithDirectQuotes(data) {
         quote: quote || item.quote,
         proxies: proxies.length ? proxies : item.proxies,
         heat,
+        reason: quote ? makeDirectUsFocusReason(item, quote, proxies) : item.reason,
         action: quote ? makeDirectUsFocusAction(quote, proxies, heat, item.newsScore) : item.action
       };
     });
@@ -1185,6 +1186,50 @@ function makeDirectUsFocusAction(quote, proxies, heat, newsScore) {
   if (pct < -3 || finiteOrZero(newsScore) < -1) return "等待企稳";
   if (heat >= 55) return "低吸观察";
   return "观察确认";
+}
+
+function makeDirectUsFocusReason(item, quote, proxies) {
+  const pct = finiteOrNull(quote.pct);
+  const drivers = [];
+  let title = "等待行情和消息确认";
+  let tone = "neutral";
+
+  if (Number.isFinite(pct)) {
+    if (pct >= 3) {
+      title = "上涨可能由资金追涨和题材热度推动";
+      tone = "positive";
+      drivers.push(`涨幅 ${pct.toFixed(2)}%，短线强度偏高`);
+    } else if (pct >= 1) {
+      title = "小幅走强，等待成交确认";
+      tone = "positive";
+      drivers.push(`涨幅 ${pct.toFixed(2)}%，趋势仍需延续`);
+    } else if (pct <= -3) {
+      title = "下跌可能来自获利回吐或风险释放";
+      tone = "negative";
+      drivers.push(`跌幅 ${Math.abs(pct).toFixed(2)}%，先看承接`);
+    } else if (pct <= -1) {
+      title = "小幅走弱，资金偏观望";
+      tone = "negative";
+      drivers.push(`跌幅 ${Math.abs(pct).toFixed(2)}%，卖压暂未扩散`);
+    } else {
+      title = "涨跌幅有限，等待催化";
+      drivers.push("价格波动不大，方向尚未确认");
+    }
+  }
+
+  const optionDriver = optionDriverText(item.options);
+  if (optionDriver) drivers.push(optionDriver);
+  const proxyPct = average((proxies || []).map((proxy) => finiteOrNull(proxy.pct)));
+  if (Number.isFinite(proxyPct) && Math.abs(proxyPct) >= 1) {
+    drivers.push(`相关标的平均${proxyPct >= 0 ? "上涨" : "下跌"} ${Math.abs(proxyPct).toFixed(2)}%`);
+  }
+  if (item.news?.[0]?.title) drivers.push(`最新线索：${trimText(item.news[0].title, 34)}`);
+
+  return {
+    title,
+    tone,
+    drivers: drivers.length ? drivers.slice(0, 3) : ["暂无明确新闻触发，按成交和期权情绪观察"]
+  };
 }
 
 function mergeDirectCurrentPoint(points, item) {
@@ -1463,6 +1508,13 @@ function usFocusCard(item) {
   const sourceText = quote?.source ? ` · ${quote.source}` : "";
   const news = item.news?.[0] || null;
   const newsTone = item.newsScore > 0 ? "利好偏多" : item.newsScore < 0 ? "利空偏多" : "消息中性";
+  const reason = item.reason || {
+    title: "等待行情和消息确认",
+    tone: "neutral",
+    drivers: ["暂无明确原因，先观察成交量和期权情绪"]
+  };
+  const reasonDriver = reason.drivers?.[0] || "暂无明确原因，先观察成交量和期权情绪";
+  const optionBlock = usFocusOptionBlock(item.options);
   const proxyBlock = item.proxies?.length
     ? `
       <div class="us-focus-proxies">
@@ -1518,9 +1570,48 @@ function usFocusCard(item) {
         </div>
       </div>
       <div class="us-focus-action ${focusActionTone(item.action, item.heat, pct)}">${escapeHtml(item.action || "观察确认")}</div>
+      <div class="us-focus-reason ${escapeAttr(reason.tone || "neutral")}">
+        <span>涨跌原因</span>
+        <strong>${escapeHtml(reason.title)}</strong>
+        <small>${escapeHtml(reasonDriver)}</small>
+      </div>
+      ${optionBlock}
       ${proxyBlock}
       ${newsBlock}
     </article>
+  `;
+}
+
+function usFocusOptionBlock(options) {
+  if (!options || options.error || !options.basis) {
+    return `
+      <div class="us-focus-options empty">
+        <div class="option-line">
+          <span>期权情绪</span>
+          <strong>期权源暂缺</strong>
+        </div>
+        <div class="option-note">公开数据无法区分买卖方向</div>
+      </div>
+    `;
+  }
+
+  const callPct = Math.max(0, Math.min(100, finiteOrZero(options.callBullishPct)));
+  const putPct = Math.max(0, Math.min(100, finiteOrZero(options.putBearishPct)));
+  return `
+    <div class="us-focus-options ${escapeAttr(options.tone || "neutral")}">
+      <div class="option-line">
+        <span>期权情绪</span>
+        <strong>${escapeHtml(options.label || "多空均衡")} · ${escapeHtml(options.basis)}</strong>
+      </div>
+      <div class="option-bars" aria-label="期权情绪比例">
+        <div class="option-bar call" style="width:${callPct.toFixed(1)}%"></div>
+        <div class="option-bar put" style="width:${putPct.toFixed(1)}%"></div>
+      </div>
+      <div class="option-split">
+        <span>买Call看多 ${callPct.toFixed(0)}%</span>
+        <span>Put防守/看空 ${putPct.toFixed(0)}%</span>
+      </div>
+    </div>
   `;
 }
 
@@ -2501,6 +2592,22 @@ function focusActionTone(action, heat, pct) {
   if (text.includes("跟踪") || text.includes("低吸")) return "positive";
   if (finiteOrZero(pct) < -3 || finiteOrZero(heat) < 45) return "negative";
   return "neutral";
+}
+
+function optionDriverText(options) {
+  if (!options || options.error || !options.basis) return "";
+  if (finiteOrZero(options.callBullishPct) >= 60) {
+    return `期权${options.basis}中买Call看多占 ${finiteOrZero(options.callBullishPct).toFixed(0)}%`;
+  }
+  if (finiteOrZero(options.putBearishPct) >= 60) {
+    return `期权${options.basis}中Put防守/看空占 ${finiteOrZero(options.putBearishPct).toFixed(0)}%`;
+  }
+  return `期权${options.basis}多空接近均衡`;
+}
+
+function trimText(value, maxLength) {
+  const text = String(value || "");
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
 }
 
 function formatPct(value) {
