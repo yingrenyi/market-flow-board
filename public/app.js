@@ -18,6 +18,12 @@ const state = {
     activeTopicId: "storage",
     timer: null
   },
+  usFocus: {
+    loading: false,
+    error: null,
+    data: null,
+    timer: null
+  },
   decision: {
     activeView: "persistence"
   },
@@ -36,6 +42,7 @@ const els = {
   sourceNote: document.getElementById("sourceNote"),
   headlineFlow: document.getElementById("headlineFlow"),
   statsStrip: document.getElementById("statsStrip"),
+  usFocusPanel: document.getElementById("usFocusPanel"),
   decisionPanel: document.getElementById("decisionPanel"),
   chartWrap: document.getElementById("chartWrap"),
   canvas: document.getElementById("flowCanvas"),
@@ -141,6 +148,21 @@ const DIRECT_US_ETFS = [
   { code: "XLC", name: "通信服务", secid: "107.XLC" },
   { code: "XLRE", name: "房地产", secid: "107.XLRE" },
   { code: "IWM", name: "小盘股", secid: "107.IWM" }
+];
+const DIRECT_US_FOCUS_TARGETS = [
+  {
+    id: "spacex",
+    code: "SPCX",
+    name: "SpaceX",
+    secid: "105.SPCX",
+    proxies: [
+      { code: "RKLB", name: "Rocket Lab", secid: "105.RKLB" },
+      { code: "TSLA", name: "特斯拉", secid: "105.TSLA" }
+    ]
+  },
+  { id: "mu", code: "MU", name: "美光科技", secid: "105.MU" },
+  { id: "nvda", code: "NVDA", name: "英伟达", secid: "105.NVDA" },
+  { id: "intc", code: "INTC", name: "英特尔", secid: "105.INTC" }
 ];
 const DIRECT_SECTOR_STOCK_BASKETS = {
   BK1201: [
@@ -341,7 +363,10 @@ function init() {
   els.marketButtons.forEach((button) => {
     button.addEventListener("click", () => setMarket(button.dataset.market));
   });
-  els.refreshButton.addEventListener("click", () => loadMarket(state.market, true));
+  els.refreshButton.addEventListener("click", () => {
+    loadMarket(state.market, true);
+    if (state.market === "us") loadUsFocus(true);
+  });
   els.autoButton.addEventListener("click", toggleAutoRefresh);
   els.decisionPanel.addEventListener("click", handleDecisionClick);
   els.searchInput.addEventListener("input", (event) => {
@@ -384,6 +409,12 @@ function setMarket(market) {
     button.classList.toggle("active", button.dataset.market === market);
   });
   loadMarket(market, true);
+  if (market === "us") {
+    loadUsFocus(true);
+  } else {
+    window.clearTimeout(state.usFocus.timer);
+    renderUsFocusPanel();
+  }
 }
 
 function toggleAutoRefresh() {
@@ -391,6 +422,7 @@ function toggleAutoRefresh() {
   els.autoButton.querySelector("span").textContent = state.autoRefresh ? "Ⅱ" : "▶";
   els.autoButton.title = state.autoRefresh ? "暂停自动刷新" : "开启自动刷新";
   scheduleRefresh();
+  scheduleUsFocusRefresh();
 }
 
 async function loadMarket(market, force = false) {
@@ -482,6 +514,32 @@ async function loadHotspots(force = false) {
     renderHotspots();
     scheduleHotspotsRefresh();
   }
+}
+
+async function loadUsFocus(force = false) {
+  if (state.market !== "us") return;
+  if (state.usFocus.loading && !force) return;
+  state.usFocus.loading = true;
+  state.usFocus.error = null;
+  renderUsFocusPanel();
+
+  try {
+    const query = force ? `?force=1&_=${Date.now()}` : `?_=${Date.now()}`;
+    const data = await fetchApiJson(`/api/us-focus${query}`);
+    state.usFocus.data = await hydrateUsFocusWithDirectQuotes(data);
+  } catch (error) {
+    state.usFocus.error = error.message;
+  } finally {
+    state.usFocus.loading = false;
+    renderUsFocusPanel();
+    scheduleUsFocusRefresh();
+  }
+}
+
+function scheduleUsFocusRefresh() {
+  window.clearTimeout(state.usFocus.timer);
+  if (state.market !== "us" || !state.autoRefresh) return;
+  state.usFocus.timer = window.setTimeout(() => loadUsFocus(), 60 * 1000);
 }
 
 function scheduleHotspotsRefresh() {
@@ -1046,6 +1104,89 @@ async function buildDirectUsPayload() {
   });
 }
 
+async function hydrateUsFocusWithDirectQuotes(data) {
+  const items = data?.items || [];
+  if (!items.length || items.every((item) => item.quote)) return data;
+
+  try {
+    const quoteMap = await fetchDirectUsFocusQuotes();
+    const nextItems = items.map((item) => {
+      const target = DIRECT_US_FOCUS_TARGETS.find((candidate) => candidate.id === item.id || candidate.code === item.code);
+      if (!target) return item;
+      const quote = normalizeDirectUsFocusQuote(target, quoteMap.get(target.code));
+      const proxies = (target.proxies || [])
+        .map((proxy) => normalizeDirectUsFocusQuote(proxy, quoteMap.get(proxy.code)))
+        .filter(Boolean);
+      const heat = quote ? calcDirectUsFocusHeat(item, quote, proxies) : item.heat;
+      return {
+        ...item,
+        quote: quote || item.quote,
+        proxies: proxies.length ? proxies : item.proxies,
+        heat,
+        action: quote ? makeDirectUsFocusAction(quote, proxies, heat, item.newsScore) : item.action
+      };
+    });
+    return {
+      ...data,
+      note: `${data.note || "美股重点观察"}；浏览器直连补充缺失行情。`,
+      items: nextItems
+    };
+  } catch {
+    return data;
+  }
+}
+
+async function fetchDirectUsFocusQuotes() {
+  const secids = DIRECT_US_FOCUS_TARGETS.flatMap((target) => [
+    target.secid,
+    ...(target.proxies || []).map((proxy) => proxy.secid)
+  ]).filter(Boolean);
+  const json = await jsonpFetchFromPush2("/api/qt/ulist.np/get", {
+    fltt: 2,
+    invt: 2,
+    fields: DIRECT_US_FIELDS,
+    secids: secids.join(",")
+  });
+  return new Map((json.data?.diff || []).map((row) => [String(row.f12), row]));
+}
+
+function normalizeDirectUsFocusQuote(target, row) {
+  if (!row) return null;
+  return {
+    code: target.code,
+    name: target.name || String(row.f14 || target.code),
+    secid: target.secid,
+    price: safeNumber(row.f2, null),
+    pct: safeNumber(row.f3, null),
+    change: safeNumber(row.f4, null),
+    volume: safeNumber(row.f5, null),
+    amount: safeNumber(row.f6, null),
+    high: safeNumber(row.f15, null),
+    low: safeNumber(row.f16, null),
+    open: safeNumber(row.f17, null),
+    previousClose: safeNumber(row.f18, null),
+    updatedAtMs: unixSecondsToMs(row.f124),
+    source: "东方财富直连"
+  };
+}
+
+function calcDirectUsFocusHeat(item, quote, proxies) {
+  const pctScore = Math.min(30, Math.abs(finiteOrZero(quote.pct)) * 5);
+  const proxyScore = proxies.some((proxy) => finiteOrZero(proxy.pct) > 1.5) ? 8 : 0;
+  const newsScore = Math.max(-10, Math.min(20, (item.news?.length || 0) * 4 + finiteOrZero(item.newsScore) * 4));
+  return Math.round(clip(42 + pctScore + proxyScore + newsScore, 0, 99));
+}
+
+function makeDirectUsFocusAction(quote, proxies, heat, newsScore) {
+  const pct = finiteOrZero(quote.pct);
+  const proxyWeak = proxies.some((proxy) => finiteOrZero(proxy.pct) < -2);
+  if (pct >= 4 && heat >= 75) return "强势但等回踩";
+  if (pct >= 1.5 && heat >= 65 && !proxyWeak) return "趋势跟踪";
+  if (pct < -3 || finiteOrZero(newsScore) < -1) return "等待企稳";
+  if (heat >= 55) return "低吸观察";
+  return "观察确认";
+}
+
 function mergeDirectCurrentPoint(points, item) {
   const next = [...(points || [])];
   const last = next.at(-1);
@@ -1189,6 +1330,7 @@ function scheduleRefresh() {
 function renderAll() {
   renderHeader();
   renderStats();
+  renderUsFocusPanel();
   renderDecisionPanel();
   renderRank();
   renderSectorDetail();
@@ -1256,6 +1398,130 @@ function renderStats() {
       `
     )
     .join("");
+}
+
+function renderUsFocusPanel() {
+  if (state.market !== "us") {
+    els.usFocusPanel.hidden = true;
+    els.usFocusPanel.innerHTML = "";
+    return;
+  }
+
+  els.usFocusPanel.hidden = false;
+  const view = state.usFocus;
+  const data = view.data;
+  const status = view.loading
+    ? "更新中"
+    : view.error
+      ? "数据异常"
+      : data?.updatedAt
+        ? `${formatRelativeTime(data.updatedAt)}更新`
+        : "等待数据";
+
+  if (!data && view.loading) {
+    els.usFocusPanel.innerHTML = usFocusShell(status, `<div class="us-focus-empty">正在加载重点公司行情...</div>`);
+    return;
+  }
+
+  if (!data && view.error) {
+    els.usFocusPanel.innerHTML = usFocusShell(status, `<div class="us-focus-empty">${escapeHtml(view.error)}</div>`);
+    return;
+  }
+
+  const items = data?.items || [];
+  const body = items.length
+    ? `<div class="us-focus-grid">${items.map(usFocusCard).join("")}</div>`
+    : `<div class="us-focus-empty">暂无重点公司数据</div>`;
+  const foot = `
+    <div class="us-focus-foot">
+      ${escapeHtml(data?.note || "美股重点公司使用行情与快讯综合观察。")}
+      ${view.error ? ` · ${escapeHtml(view.error)}` : ""}
+    </div>
+  `;
+
+  els.usFocusPanel.innerHTML = usFocusShell(status, `${body}${foot}`);
+}
+
+function usFocusShell(status, body) {
+  return `
+    <div class="us-focus-head">
+      <div>
+        <div class="us-focus-title">美股重点观察</div>
+        <div class="us-focus-subtitle">SpaceX、镁光、英伟达、英特尔 · 成交量 / 热度 / 动作</div>
+      </div>
+      <div class="us-focus-status">${escapeHtml(status)}</div>
+    </div>
+    ${body}
+  `;
+}
+
+function usFocusCard(item) {
+  const quote = item.quote;
+  const pct = finiteOrNull(quote?.pct);
+  const tone = pct === null ? "neutral" : pct >= 0 ? "positive" : "negative";
+  const priceText = quote ? `$${formatPrice(quote.price)}` : "--";
+  const sourceText = quote?.source ? ` · ${quote.source}` : "";
+  const news = item.news?.[0] || null;
+  const newsTone = item.newsScore > 0 ? "利好偏多" : item.newsScore < 0 ? "利空偏多" : "消息中性";
+  const proxyBlock = item.proxies?.length
+    ? `
+      <div class="us-focus-proxies">
+        ${item.proxies
+          .map(
+            (proxy) => `
+              <span class="proxy-chip ${finiteOrZero(proxy.pct) >= 0 ? "positive" : "negative"}">
+                ${escapeHtml(proxy.code)} ${escapeHtml(formatPct(proxy.pct))}
+              </span>
+            `
+          )
+          .join("")}
+      </div>
+    `
+    : "";
+  const newsBlock = news
+    ? `
+      <a class="us-focus-news" href="${escapeAttr(news.url)}" target="_blank" rel="noopener noreferrer">
+        <span class="sentiment ${escapeAttr(news.sentiment?.tone || "neutral")}">${escapeHtml(news.sentiment?.label || "中性")}</span>
+        <span>${escapeHtml(news.title)}</span>
+      </a>
+    `
+    : `<div class="us-focus-news muted">暂无强相关快讯</div>`;
+
+  return `
+    <article class="us-focus-card ${tone}">
+      <div class="us-focus-card-top">
+        <div class="us-focus-company">
+          <div class="us-focus-name">${escapeHtml(item.name)}</div>
+          <div class="us-focus-code">${escapeHtml(`${item.code || item.displayName || "--"}${sourceText}`)}</div>
+        </div>
+        <div class="us-focus-heat">
+          <span>${escapeHtml(String(item.heat ?? "--"))}</span>
+          <small>热度</small>
+        </div>
+      </div>
+      <div class="us-focus-price-row">
+        <div class="us-focus-price">${escapeHtml(priceText)}</div>
+        <div class="us-focus-pct ${tone}">${escapeHtml(formatPct(pct))}</div>
+      </div>
+      <div class="us-focus-metrics">
+        <div>
+          <span>成交量</span>
+          <strong>${escapeHtml(formatUsVolume(quote?.volume))}</strong>
+        </div>
+        <div>
+          <span>成交额</span>
+          <strong>${escapeHtml(formatUsAmount(quote?.amount))}</strong>
+        </div>
+        <div>
+          <span>消息</span>
+          <strong>${escapeHtml(newsTone)}</strong>
+        </div>
+      </div>
+      <div class="us-focus-action ${focusActionTone(item.action, item.heat, pct)}">${escapeHtml(item.action || "观察确认")}</div>
+      ${proxyBlock}
+      ${newsBlock}
+    </article>
+  `;
 }
 
 function renderDecisionPanel() {
@@ -2213,6 +2479,28 @@ function formatAxisMoney(value, data) {
   if (Math.abs(scaled) >= 100) return `${scaled.toFixed(0)}`;
   if (Math.abs(scaled) >= 10) return `${scaled.toFixed(1)}`;
   return `${scaled.toFixed(2)}`;
+}
+
+function formatUsVolume(value) {
+  if (!Number.isFinite(value) || value <= 0) return "--";
+  if (value >= 1e8) return `${(value / 1e8).toFixed(2)}亿股`;
+  if (value >= 1e4) return `${(value / 1e4).toFixed(1)}万股`;
+  return `${value.toFixed(0)}股`;
+}
+
+function formatUsAmount(value) {
+  if (!Number.isFinite(value) || value <= 0) return "--";
+  if (value >= 1e8) return `${(value / 1e8).toFixed(2)}亿美元`;
+  if (value >= 1e4) return `${(value / 1e4).toFixed(1)}万美元`;
+  return `${value.toFixed(0)}美元`;
+}
+
+function focusActionTone(action, heat, pct) {
+  const text = String(action || "");
+  if (text.includes("等待") || text.includes("回踩") || text.includes("企稳")) return "warn";
+  if (text.includes("跟踪") || text.includes("低吸")) return "positive";
+  if (finiteOrZero(pct) < -3 || finiteOrZero(heat) < 45) return "negative";
+  return "neutral";
 }
 
 function formatPct(value) {

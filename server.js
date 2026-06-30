@@ -99,6 +99,44 @@ const US_ETFS = [
   { code: "XLRE", name: "房地产", secid: "107.XLRE" },
   { code: "IWM", name: "小盘股", secid: "107.IWM" }
 ];
+const US_FOCUS_TARGETS = [
+  {
+    id: "spacex",
+    code: "SPCX",
+    name: "SpaceX",
+    displayName: "SpaceX",
+    secid: "105.SPCX",
+    keywords: ["SpaceX", "SPCX", "星舰", "星链", "Starlink", "Starship", "商业航天", "马斯克"],
+    proxies: [
+      { code: "RKLB", name: "Rocket Lab", secid: "105.RKLB" },
+      { code: "TSLA", name: "特斯拉", secid: "105.TSLA" }
+    ]
+  },
+  {
+    id: "mu",
+    code: "MU",
+    name: "美光科技",
+    displayName: "Micron",
+    secid: "105.MU",
+    keywords: ["美光", "Micron", "MU", "存储", "DRAM", "NAND", "HBM"]
+  },
+  {
+    id: "nvda",
+    code: "NVDA",
+    name: "英伟达",
+    displayName: "NVIDIA",
+    secid: "105.NVDA",
+    keywords: ["英伟达", "NVIDIA", "NVDA", "GPU", "AI芯片", "算力", "CUDA"]
+  },
+  {
+    id: "intc",
+    code: "INTC",
+    name: "英特尔",
+    displayName: "Intel",
+    secid: "105.INTC",
+    keywords: ["英特尔", "Intel", "INTC", "CPU", "晶圆代工", "x86", "PC"]
+  }
+];
 
 const HOTSPOT_TTL_MS = 30 * 60 * 1000;
 const HOTSPOT_TOPICS = [
@@ -226,6 +264,31 @@ async function fetchJson(url, ttlMs = 15000) {
     if (body && Number(body.rc) !== 0) {
       throw new Error(`Eastmoney rc=${body.rc}`);
     }
+    memoryCache.set(url, { storedAt: now, body });
+    return body;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchRawJson(url, ttlMs = 15000, headers = REQUEST_HEADERS) {
+  const cached = memoryCache.get(url);
+  const now = Date.now();
+  if (cached && now - cached.storedAt < ttlMs) {
+    return cached.body;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(url, {
+      headers,
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} from ${new URL(url).hostname}`);
+    }
+    const body = await response.json();
     memoryCache.set(url, { storedAt: now, body });
     return body;
   } finally {
@@ -566,6 +629,184 @@ async function fetchUsQuotes() {
   const json = await fetchJson(buildUsQuoteUrl(), 15000);
   const rows = json.data?.diff || [];
   return new Map(rows.map((row) => [String(row.f12), row]));
+}
+
+function buildUsFocusQuoteUrl() {
+  const secids = US_FOCUS_TARGETS.flatMap((target) => [
+    target.secid,
+    ...(target.proxies || []).map((proxy) => proxy.secid)
+  ]).filter(Boolean);
+  return makeUrl("https://push2.eastmoney.com/api/qt/ulist.np/get", {
+    fltt: 2,
+    invt: 2,
+    fields: US_FIELDS,
+    secids: secids.join(",")
+  });
+}
+
+async function fetchUsFocusQuotes() {
+  const json = await fetchJson(buildUsFocusQuoteUrl(), 12000);
+  const rows = json.data?.diff || [];
+  return new Map(rows.map((row) => [String(row.f12), row]));
+}
+
+function buildYahooUsFocusQuoteUrl() {
+  const symbols = US_FOCUS_TARGETS.flatMap((target) => [
+    target.code,
+    ...(target.proxies || []).map((proxy) => proxy.code)
+  ])
+    .filter(Boolean)
+    .join(",");
+  return makeUrl("https://query1.finance.yahoo.com/v7/finance/quote", {
+    symbols
+  });
+}
+
+async function fetchYahooUsFocusQuotes() {
+  const json = await fetchRawJson(buildYahooUsFocusQuoteUrl(), 15000, {
+    "accept": "application/json,text/plain,*/*",
+    "user-agent": REQUEST_HEADERS["user-agent"]
+  });
+  const rows = json.quoteResponse?.result || [];
+  return new Map(rows.map((row) => [String(row.symbol || "").toUpperCase(), row]));
+}
+
+async function buildUsFocusPayload() {
+  const [quotes, yahooQuotes, newsCorpus] = await Promise.all([
+    fetchUsFocusQuotes().catch(() => new Map()),
+    fetchYahooUsFocusQuotes().catch(() => new Map()),
+    fetchEastmoneyFastNewsCorpus().catch(() => [])
+  ]);
+  const maxAmount = Math.max(
+    1,
+    ...[...quotes.values()].map((row) => safeNumber(row.f6)),
+    ...[...yahooQuotes.values()].map((row) => safeNumber(row.regularMarketPrice) * safeNumber(row.regularMarketVolume))
+  );
+
+  const items = US_FOCUS_TARGETS.map((target) => {
+    const quote = target.code
+      ? normalizeUsFocusQuote(target, quotes.get(target.code)) || normalizeYahooUsFocusQuote(target, yahooQuotes.get(target.code))
+      : null;
+    const proxyQuotes = (target.proxies || [])
+      .map((proxy) => normalizeUsFocusQuote(proxy, quotes.get(proxy.code)) || normalizeYahooUsFocusQuote(proxy, yahooQuotes.get(proxy.code)))
+      .filter(Boolean);
+    const news = filterFocusNews(newsCorpus, target).slice(0, 5);
+    const positiveNews = news.filter((item) => item.sentiment?.tone === "positive").length;
+    const negativeNews = news.filter((item) => item.sentiment?.tone === "negative").length;
+    const heat = calcUsFocusHeat({ quote, proxyQuotes, news, positiveNews, negativeNews, maxAmount });
+    return {
+      id: target.id,
+      name: target.name,
+      displayName: target.displayName,
+      code: target.code || null,
+      private: Boolean(target.private),
+      quote,
+      proxies: proxyQuotes,
+      news,
+      heat,
+      newsScore: positiveNews - negativeNews,
+      action: makeUsFocusAction({ target, quote, proxyQuotes, heat, positiveNews, negativeNews })
+    };
+  });
+
+  return {
+    market: "us",
+    title: "美股重点观察",
+    source: "东方财富美股行情 / Yahoo Finance 备用 + 东方财富快讯",
+    generatedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    note: "SPCX、MU、NVDA、INTC 优先使用东方财富美股行情；取不到时使用 Yahoo Finance 报价，成交额按价格乘成交量估算。",
+    items
+  };
+}
+
+function normalizeUsFocusQuote(target, row) {
+  if (!row) return null;
+  return {
+    code: target.code,
+    name: target.name || String(row.f14 || target.code),
+    secid: target.secid,
+    price: safeNumber(row.f2, null),
+    pct: safeNumber(row.f3, null),
+    change: safeNumber(row.f4, null),
+    volume: safeNumber(row.f5, null),
+    amount: safeNumber(row.f6, null),
+    high: safeNumber(row.f15, null),
+    low: safeNumber(row.f16, null),
+    open: safeNumber(row.f17, null),
+    previousClose: safeNumber(row.f18, null),
+    updatedAtMs: unixSecondsToMs(row.f124),
+    source: "东方财富"
+  };
+}
+
+function normalizeYahooUsFocusQuote(target, row) {
+  if (!row) return null;
+  const price = safeNumber(row.regularMarketPrice, null);
+  const volume = safeNumber(row.regularMarketVolume, null);
+  return {
+    code: target.code,
+    name: target.name || String(row.shortName || row.longName || target.code),
+    secid: target.secid,
+    price,
+    pct: safeNumber(row.regularMarketChangePercent, null),
+    change: safeNumber(row.regularMarketChange, null),
+    volume,
+    amount: Number.isFinite(price) && Number.isFinite(volume) ? price * volume : null,
+    high: safeNumber(row.regularMarketDayHigh, null),
+    low: safeNumber(row.regularMarketDayLow, null),
+    open: safeNumber(row.regularMarketOpen, null),
+    previousClose: safeNumber(row.regularMarketPreviousClose, null),
+    updatedAtMs: unixSecondsToMs(row.regularMarketTime),
+    source: "Yahoo Finance"
+  };
+}
+
+function filterFocusNews(newsCorpus, target) {
+  const keywords = target.keywords || [target.name];
+  return uniqueHotspotItems(
+    newsCorpus
+      .filter((item) => {
+        const text = `${item.title} ${item.summary} ${item.rawText || ""}`.toLowerCase();
+        return keywords.some((keyword) => text.includes(String(keyword).toLowerCase()));
+      })
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        summary: item.summary,
+        url: item.url,
+        source: item.source,
+        publishedAt: item.publishedAt,
+        sentiment: item.sentiment
+      }))
+  );
+}
+
+function calcUsFocusHeat({ quote, proxyQuotes, news, positiveNews, negativeNews, maxAmount }) {
+  const quoteBase = quote || proxyQuotes[0] || null;
+  const pct = Math.abs(safeNumber(quoteBase?.pct));
+  const amount = safeNumber(quoteBase?.amount);
+  const amountScore = maxAmount > 0 ? Math.min(28, (amount / maxAmount) * 28) : 0;
+  const pctScore = Math.min(30, pct * 5);
+  const newsScore = Math.min(24, news.length * 5 + positiveNews * 4 - negativeNews * 3);
+  const proxyScore = quote ? 0 : Math.min(12, proxyQuotes.length * 6);
+  return Math.round(Math.max(0, Math.min(99, 28 + amountScore + pctScore + newsScore + proxyScore)));
+}
+
+function makeUsFocusAction({ target, quote, proxyQuotes, heat, positiveNews, negativeNews }) {
+  if (target.private) {
+    if (positiveNews > negativeNews || heat >= 70) return "关注航天链，不能直接交易";
+    return "仅跟踪新闻和代理标的";
+  }
+  if (!quote) return "等待行情恢复";
+  const pct = safeNumber(quote.pct);
+  const amount = safeNumber(quote.amount);
+  const proxyWeak = proxyQuotes.some((proxy) => safeNumber(proxy.pct) < -2);
+  if (pct >= 4 && heat >= 75) return "强势但等回踩";
+  if (pct >= 1.5 && heat >= 65 && !proxyWeak) return "趋势跟踪";
+  if (pct < -3 || negativeNews > positiveNews + 1) return "等待企稳";
+  if (amount > 0 && heat >= 55) return "低吸观察";
+  return "观察确认";
 }
 
 async function fetchUsLine(etf) {
@@ -1153,6 +1394,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (reqUrl.pathname === "/api/us") {
       sendJson(response, 200, await buildUsPayload());
+      return;
+    }
+    if (reqUrl.pathname === "/api/us-focus") {
+      sendJson(response, 200, await buildUsFocusPayload());
       return;
     }
     if (reqUrl.pathname === "/api/hotspots") {
