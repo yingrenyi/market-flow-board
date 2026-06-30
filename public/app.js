@@ -46,6 +46,15 @@ const GREEN = "#087455";
 const MUTED = "#68706d";
 const GRID = "rgba(37, 50, 45, 0.12)";
 const DIRECT_EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281";
+const DIRECT_PUSH2_HOSTS = [
+  "https://push2.eastmoney.com",
+  "https://16.push2.eastmoney.com",
+  "https://18.push2.eastmoney.com",
+  "https://28.push2.eastmoney.com",
+  "https://40.push2.eastmoney.com",
+  "https://50.push2.eastmoney.com",
+  "https://60.push2.eastmoney.com"
+];
 const DIRECT_A_SHARE_FIELDS = [
   "f12",
   "f14",
@@ -272,6 +281,18 @@ function jsonpFetch(base, params = {}, timeoutMs = 12000) {
   });
 }
 
+async function jsonpFetchFromPush2(path, params = {}, timeoutMs = 12000) {
+  const errors = [];
+  for (const host of DIRECT_PUSH2_HOSTS) {
+    try {
+      return await jsonpFetch(`${host}${path}`, params, timeoutMs);
+    } catch (error) {
+      errors.push(`${host.replace("https://", "")}: ${error.message}`);
+    }
+  }
+  throw new Error(errors.join(" / "));
+}
+
 async function buildDirectAsharePayload() {
   const topIn = 32;
   const topOut = 23;
@@ -338,7 +359,7 @@ async function buildDirectAsharePayload() {
 }
 
 async function fetchDirectAshareRank(po, size) {
-  const json = await jsonpFetch("https://push2.eastmoney.com/api/qt/clist/get", {
+  const json = await jsonpFetchFromPush2("/api/qt/clist/get", {
     pn: 1,
     pz: size,
     po,
@@ -354,8 +375,8 @@ async function fetchDirectAshareRank(po, size) {
 }
 
 async function fetchDirectAshareLine(code) {
-  const json = await jsonpFetch(
-    "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
+  const json = await jsonpFetchFromPush2(
+    "/api/qt/stock/fflow/kline/get",
     {
       lmt: 0,
       klt: 1,
@@ -412,20 +433,23 @@ async function buildDirectAshareSectorPayload(item, size = 10) {
     throw new Error("Invalid sector code");
   }
 
-  const json = await jsonpFetch("https://push2.eastmoney.com/api/qt/clist/get", {
+  const json = await jsonpFetchFromPush2("/api/qt/clist/get", {
     pn: 1,
-    pz: size,
+    pz: 500,
     po: 1,
     np: 1,
     ut: DIRECT_EASTMONEY_UT,
     fltt: 2,
     invt: 2,
-    fid: "f62",
+    fid: "f3",
     fs: `b:${code}`,
     fields: DIRECT_A_SHARE_STOCK_FIELDS
   });
   const rows = json.data?.diff || [];
-  const stocks = rows.map((row, index) => normalizeDirectAshareStock(row, index + 1));
+  const stocks = rows
+    .sort((a, b) => safeNumber(b.f62) - safeNumber(a.f62))
+    .slice(0, size)
+    .map((row, index) => normalizeDirectAshareStock(row, index + 1));
   const updatedAtMs = Math.max(0, ...stocks.map((stock) => stock.updatedAtMs || 0));
 
   return {

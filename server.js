@@ -174,13 +174,13 @@ async function fetchAshareRank(po, size) {
 function buildAshareSectorUrl(code, size) {
   return makeUrl("https://push2.eastmoney.com/api/qt/clist/get", {
     pn: 1,
-    pz: size,
+    pz: Math.max(size, 500),
     po: 1,
     np: 1,
     ut: EASTMONEY_UT,
     fltt: 2,
     invt: 2,
-    fid: "f62",
+    fid: "f3",
     fs: `b:${code}`,
     fields: A_SHARE_STOCK_FIELDS
   });
@@ -220,7 +220,10 @@ async function buildAshareSectorPayload(reqUrl) {
 
   const json = await fetchJson(buildAshareSectorUrl(code, size), 10000);
   const rows = json.data?.diff || [];
-  const stocks = rows.map((row, index) => normalizeAshareStock(row, index + 1));
+  const stocks = rows
+    .sort((a, b) => safeNumber(b.f62) - safeNumber(a.f62))
+    .slice(0, size)
+    .map((row, index) => normalizeAshareStock(row, index + 1));
   const updatedAtMs = Math.max(0, ...stocks.map((stock) => stock.updatedAtMs || 0));
 
   return {
