@@ -45,6 +45,68 @@ const RED = "#a2252f";
 const GREEN = "#087455";
 const MUTED = "#68706d";
 const GRID = "rgba(37, 50, 45, 0.12)";
+const DIRECT_EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281";
+const DIRECT_A_SHARE_FIELDS = [
+  "f12",
+  "f14",
+  "f62",
+  "f66",
+  "f69",
+  "f72",
+  "f75",
+  "f78",
+  "f81",
+  "f84",
+  "f87",
+  "f124",
+  "f184"
+].join(",");
+const DIRECT_A_SHARE_STOCK_FIELDS = [
+  "f12",
+  "f13",
+  "f14",
+  "f2",
+  "f3",
+  "f4",
+  "f5",
+  "f6",
+  "f62",
+  "f66",
+  "f72",
+  "f78",
+  "f84",
+  "f124",
+  "f184"
+].join(",");
+const DIRECT_US_FIELDS = [
+  "f12",
+  "f14",
+  "f2",
+  "f3",
+  "f4",
+  "f5",
+  "f6",
+  "f15",
+  "f16",
+  "f17",
+  "f18",
+  "f124",
+  "f152"
+].join(",");
+const DIRECT_US_ETFS = [
+  { code: "XLK", name: "科技", secid: "107.XLK" },
+  { code: "XLF", name: "金融", secid: "107.XLF" },
+  { code: "XLE", name: "能源", secid: "107.XLE" },
+  { code: "XLV", name: "医疗保健", secid: "107.XLV" },
+  { code: "XLI", name: "工业", secid: "107.XLI" },
+  { code: "XLP", name: "必需消费", secid: "107.XLP" },
+  { code: "XLU", name: "公用事业", secid: "107.XLU" },
+  { code: "XLB", name: "材料", secid: "107.XLB" },
+  { code: "XLY", name: "可选消费", secid: "107.XLY" },
+  { code: "XLC", name: "通信服务", secid: "107.XLC" },
+  { code: "XLRE", name: "房地产", secid: "107.XLRE" },
+  { code: "IWM", name: "小盘股", secid: "107.IWM" }
+];
 
 function init() {
   updateDateClock();
@@ -112,27 +174,494 @@ async function loadMarket(market, force = false) {
 
   try {
     const endpoint = market === "cn" ? "/api/a-share" : "/api/us";
-    const response = await fetch(`${endpoint}?_=${Date.now()}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    if (data.error) throw new Error(data.error);
-    state.data = data;
-    if (state.activeSector && !data.items.some((item) => item.code === state.activeSector.code)) {
-      state.activeSector = null;
-      resetSectorDetail();
-    }
-    renderAll();
+    const data = await fetchApiJson(`${endpoint}?_=${Date.now()}`);
+    applyMarketData(data);
   } catch (error) {
-    state.error = error;
-    els.canvasEmpty.textContent = `数据连接失败：${error.message}`;
-    renderHeader();
-    renderRank();
-    drawChart();
+    try {
+      const fallbackData = await loadDirectMarket(market);
+      fallbackData.note = `${fallbackData.note} Render代理失败，已切到浏览器直连兜底。`;
+      applyMarketData(fallbackData);
+    } catch (fallbackError) {
+      const message = `${error.message}；浏览器直连也失败：${fallbackError.message}`;
+      state.error = new Error(message);
+      els.canvasEmpty.textContent = `数据连接失败：${message}`;
+      renderHeader();
+      renderRank();
+      drawChart();
+    }
   } finally {
     state.loading = false;
     els.refreshButton.classList.remove("spinning");
     scheduleRefresh();
   }
+}
+
+async function fetchApiJson(url) {
+  const response = await fetch(url, { cache: "no-store", credentials: "same-origin" });
+  let payload = null;
+  let text = "";
+
+  try {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      payload = await response.json();
+    } else {
+      text = await response.text();
+    }
+  } catch {
+    text = "";
+  }
+
+  if (!response.ok) {
+    throw new Error(payload?.error || text || `HTTP ${response.status}`);
+  }
+  if (payload?.error) throw new Error(payload.error);
+  return payload;
+}
+
+function applyMarketData(data) {
+  state.data = data;
+  if (state.activeSector && !data.items.some((item) => item.code === state.activeSector.code)) {
+    state.activeSector = null;
+    resetSectorDetail();
+  }
+  renderAll();
+}
+
+function loadDirectMarket(market) {
+  return market === "cn" ? buildDirectAsharePayload() : buildDirectUsPayload();
+}
+
+function jsonpFetch(base, params = {}, timeoutMs = 12000) {
+  return new Promise((resolve, reject) => {
+    const callbackName = `__marketFlowJsonp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const url = new URL(base);
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+    });
+    url.searchParams.set("cb", callbackName);
+
+    const script = document.createElement("script");
+    let settled = false;
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      delete window[callbackName];
+      script.remove();
+    };
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+    const timer = window.setTimeout(() => {
+      finish(reject, new Error("JSONP timeout"));
+    }, timeoutMs);
+
+    window[callbackName] = (payload) => {
+      if (payload && payload.rc !== undefined && Number(payload.rc) !== 0) {
+        finish(reject, new Error(`Eastmoney rc=${payload.rc}`));
+        return;
+      }
+      finish(resolve, payload);
+    };
+    script.onerror = () => finish(reject, new Error("JSONP network error"));
+    script.src = url.href;
+    document.head.appendChild(script);
+  });
+}
+
+async function buildDirectAsharePayload() {
+  const topIn = 32;
+  const topOut = 23;
+  const [inflowRows, outflowRows] = await Promise.all([
+    fetchDirectAshareRank(1, topIn),
+    fetchDirectAshareRank(0, topOut)
+  ]);
+
+  if (!inflowRows.length && !outflowRows.length) {
+    throw new Error("A股板块排行为空");
+  }
+
+  const byCode = new Map();
+  inflowRows.forEach((row, index) => {
+    const item = normalizeDirectAshareRow(row, "inflow", index + 1);
+    byCode.set(item.code, item);
+  });
+  outflowRows.forEach((row, index) => {
+    const item = normalizeDirectAshareRow(row, "outflow", index + 1);
+    if (!byCode.has(item.code)) byCode.set(item.code, item);
+  });
+
+  const selected = [...byCode.values()];
+  const lineCodes = new Set(
+    [...selected]
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+      .slice(0, 24)
+      .map((item) => item.code)
+  );
+  const lineResults = await mapLimitDirect(selected, 8, async (item) => {
+    if (!lineCodes.has(item.code)) return { points: [] };
+    try {
+      return await fetchDirectAshareLine(item.code);
+    } catch (error) {
+      return { points: [], error: error.message };
+    }
+  });
+
+  const items = selected.map((item, index) => {
+    const line = lineResults[index];
+    const points = mergeDirectCurrentPoint(line.points, item);
+    const fallbackPoints = points.length ? points : fallbackIntradayPoints(item, "cn");
+    return {
+      ...item,
+      points: fallbackPoints,
+      lineError: line.error || null,
+      lastValue: fallbackPoints.at(-1)?.value ?? item.value
+    };
+  });
+
+  return buildDirectPayload({
+    market: "cn",
+    title: "A股板块主力资金流",
+    subtitle: `流入Top${topIn} + 流出Top${topOut}`,
+    currency: "CNY",
+    unitLabel: "亿元",
+    valueLabel: "主力净流入",
+    source: "东方财富板块资金流（浏览器直连）",
+    estimate: false,
+    note: "A股使用东方财富板块资金流字段。",
+    sessionLabel: "09:30 - 11:30 / 13:00 - 15:00",
+    items
+  });
+}
+
+async function fetchDirectAshareRank(po, size) {
+  const json = await jsonpFetch("https://push2.eastmoney.com/api/qt/clist/get", {
+    pn: 1,
+    pz: size,
+    po,
+    np: 1,
+    ut: DIRECT_EASTMONEY_UT,
+    fltt: 2,
+    invt: 2,
+    fid: "f62",
+    fs: "m:90+t:2",
+    fields: DIRECT_A_SHARE_FIELDS
+  });
+  return json.data?.diff || [];
+}
+
+async function fetchDirectAshareLine(code) {
+  const json = await jsonpFetch(
+    "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
+    {
+      lmt: 0,
+      klt: 1,
+      fields1: "f1,f2,f3,f7",
+      fields2: "f51,f52,f53,f54,f55,f56,f57",
+      secid: `90.${code}`
+    },
+    3000
+  );
+  const data = json.data || {};
+  const points = (data.klines || [])
+    .map((line) => {
+      const parts = String(line).split(",");
+      const t = parseBeijingTimestamp(parts[0]);
+      return {
+        t,
+        label: parts[0],
+        value: safeNumber(parts[1]),
+        small: safeNumber(parts[2]),
+        medium: safeNumber(parts[3]),
+        large: safeNumber(parts[4]),
+        super: safeNumber(parts[5])
+      };
+    })
+    .filter((point) => point.t > 0);
+
+  return {
+    name: data.name,
+    tradePeriods: data.tradePeriods || null,
+    points
+  };
+}
+
+function normalizeDirectAshareRow(row, side, rank) {
+  return {
+    code: String(row.f12 || ""),
+    name: String(row.f14 || ""),
+    side,
+    rank,
+    value: safeNumber(row.f62),
+    superFlow: safeNumber(row.f66),
+    largeFlow: safeNumber(row.f72),
+    mediumFlow: safeNumber(row.f78),
+    smallFlow: safeNumber(row.f84),
+    share: safeNumber(row.f184),
+    updatedAtMs: unixSecondsToMs(row.f124),
+    rawName: String(row.f14 || "")
+  };
+}
+
+async function buildDirectAshareSectorPayload(item, size = 10) {
+  const code = String(item.code || "").trim().toUpperCase();
+  if (!/^BK\d{4}$/.test(code)) {
+    throw new Error("Invalid sector code");
+  }
+
+  const json = await jsonpFetch("https://push2.eastmoney.com/api/qt/clist/get", {
+    pn: 1,
+    pz: size,
+    po: 1,
+    np: 1,
+    ut: DIRECT_EASTMONEY_UT,
+    fltt: 2,
+    invt: 2,
+    fid: "f62",
+    fs: `b:${code}`,
+    fields: DIRECT_A_SHARE_STOCK_FIELDS
+  });
+  const rows = json.data?.diff || [];
+  const stocks = rows.map((row, index) => normalizeDirectAshareStock(row, index + 1));
+  const updatedAtMs = Math.max(0, ...stocks.map((stock) => stock.updatedAtMs || 0));
+
+  return {
+    market: "cn",
+    sector: {
+      code,
+      name: item.name,
+      total: json.data?.total || stocks.length
+    },
+    title: `${item.name || code} 个股资金流入Top${size}`,
+    source: "东方财富板块成分股资金流（浏览器直连）",
+    generatedAt: new Date().toISOString(),
+    updatedAt: updatedAtMs ? new Date(updatedAtMs).toISOString() : null,
+    currency: "CNY",
+    unitLabel: "亿元",
+    valueLabel: "主力净流入",
+    stocks
+  };
+}
+
+function normalizeDirectAshareStock(row, rank) {
+  return {
+    code: String(row.f12 || ""),
+    market: safeNumber(row.f13, null),
+    name: String(row.f14 || ""),
+    rank,
+    price: safeNumber(row.f2, null),
+    pct: safeNumber(row.f3, null),
+    change: safeNumber(row.f4, null),
+    volume: safeNumber(row.f5, null),
+    amount: safeNumber(row.f6, null),
+    value: safeNumber(row.f62),
+    superFlow: safeNumber(row.f66),
+    largeFlow: safeNumber(row.f72),
+    mediumFlow: safeNumber(row.f78),
+    smallFlow: safeNumber(row.f84),
+    share: safeNumber(row.f184, null),
+    updatedAtMs: unixSecondsToMs(row.f124)
+  };
+}
+
+async function buildDirectUsPayload() {
+  const json = await jsonpFetch("https://push2.eastmoney.com/api/qt/ulist.np/get", {
+    fltt: 2,
+    invt: 2,
+    fields: DIRECT_US_FIELDS,
+    secids: DIRECT_US_ETFS.map((item) => item.secid).join(",")
+  });
+  const quoteMap = new Map((json.data?.diff || []).map((row) => [String(row.f12), row]));
+  const quoteItems = DIRECT_US_ETFS.filter((etf) => quoteMap.has(etf.code)).map((etf) => {
+    const quote = quoteMap.get(etf.code);
+    return {
+      ...etf,
+      exchangeName: String(quote.f14 || etf.name),
+      price: safeNumber(quote.f2),
+      pct: safeNumber(quote.f3),
+      change: safeNumber(quote.f4),
+      volume: safeNumber(quote.f5),
+      amount: safeNumber(quote.f6),
+      open: safeNumber(quote.f17),
+      previousClose: safeNumber(quote.f18),
+      high: safeNumber(quote.f15),
+      low: safeNumber(quote.f16),
+      updatedAtMs: unixSecondsToMs(quote.f124)
+    };
+  });
+
+  if (!quoteItems.length) {
+    throw new Error("美股ETF报价为空");
+  }
+
+  const items = quoteItems.map((item, index) => {
+    const value = item.amount * (item.pct >= 0 ? 1 : -1);
+    return {
+      code: item.code,
+      name: item.name,
+      rawName: item.exchangeName,
+      side: value >= 0 ? "inflow" : "outflow",
+      rank: index + 1,
+      value,
+      lastValue: value,
+      pct: item.pct,
+      price: item.price,
+      volume: item.volume,
+      amount: item.amount,
+      updatedAtMs: item.updatedAtMs,
+      points: fallbackIntradayPoints({ ...item, value }, "us"),
+      lineError: null
+    };
+  });
+
+  return buildDirectPayload({
+    market: "us",
+    title: "美股板块资金强度",
+    subtitle: "行业ETF代理估算",
+    currency: "USD",
+    unitLabel: "亿美元",
+    valueLabel: "估算净流强度",
+    source: "东方财富美股ETF报价（浏览器直连）",
+    estimate: true,
+    note: "美股侧使用行业ETF成交额和涨跌方向估算，并非交易所披露的真实资金流。",
+    sessionLabel: "美股常规交易时段（北京时间）",
+    items
+  });
+}
+
+function mergeDirectCurrentPoint(points, item) {
+  const next = [...(points || [])];
+  const last = next.at(-1);
+  if (!item.updatedAtMs) return next;
+  if (!last || item.updatedAtMs - last.t > 30000) {
+    next.push({
+      t: item.updatedAtMs,
+      label: formatBeijingLabel(item.updatedAtMs),
+      value: item.value,
+      small: item.smallFlow,
+      medium: item.mediumFlow,
+      large: item.largeFlow,
+      super: item.superFlow
+    });
+  }
+  return next;
+}
+
+function fallbackIntradayPoints(item, market) {
+  const end = item.updatedAtMs || Date.now();
+  const start = marketStartMs(end, market);
+  return [
+    {
+      t: start,
+      label: formatBeijingLabel(start),
+      value: 0,
+      price: item.price,
+      amount: item.amount,
+      volume: item.volume
+    },
+    {
+      t: end,
+      label: formatBeijingLabel(end),
+      value: item.value,
+      price: item.price,
+      amount: item.amount,
+      volume: item.volume
+    }
+  ];
+}
+
+function marketStartMs(endMs, market) {
+  const end = Number.isFinite(endMs) ? endMs : Date.now();
+  const date = new Date(end);
+  if (market === "cn") {
+    date.setHours(9, 30, 0, 0);
+  } else {
+    date.setTime(end - 4 * 60 * 60 * 1000);
+  }
+  const start = date.getTime();
+  return start > 0 && start < end ? start : end - 90 * 60 * 1000;
+}
+
+function buildDirectPayload(config) {
+  const items = [...config.items].sort((a, b) => b.value - a.value);
+  const inflow = items.filter((item) => item.value >= 0);
+  const outflow = items.filter((item) => item.value < 0).sort((a, b) => a.value - b.value);
+  const allByAbs = [...items].sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  const updatedAtMs = Math.max(0, ...items.map((item) => item.updatedAtMs || 0));
+  const positiveTotal = inflow.reduce((sum, item) => sum + item.value, 0);
+  const negativeTotal = outflow.reduce((sum, item) => sum + item.value, 0);
+
+  return {
+    market: config.market,
+    title: config.title,
+    subtitle: config.subtitle,
+    currency: config.currency,
+    unitLabel: config.unitLabel,
+    valueLabel: config.valueLabel,
+    source: config.source,
+    estimate: config.estimate,
+    note: config.note,
+    sessionLabel: config.sessionLabel,
+    generatedAt: new Date().toISOString(),
+    updatedAt: updatedAtMs ? new Date(updatedAtMs).toISOString() : null,
+    summary: {
+      inflowCount: inflow.length,
+      outflowCount: outflow.length,
+      positiveTotal,
+      negativeTotal,
+      strongest: inflow[0] || allByAbs[0] || null,
+      weakest: outflow[0] || allByAbs.at(-1) || null
+    },
+    items
+  };
+}
+
+async function mapLimitDirect(items, limit, iterator) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await iterator(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function safeNumber(value, fallback = 0) {
+  if (value === null || value === undefined || value === "-" || value === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseBeijingTimestamp(text) {
+  if (!text) return 0;
+  const normalized = text.includes(":")
+    ? `${text.replace(" ", "T")}:00+08:00`
+    : `${text}T00:00:00+08:00`;
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function unixSecondsToMs(seconds) {
+  const value = safeNumber(seconds, 0);
+  return value > 0 ? value * 1000 : 0;
+}
+
+function formatBeijingLabel(ms) {
+  if (!ms) return "";
+  const date = new Date(ms);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${month}-${day} ${hour}:${minute}`;
 }
 
 function scheduleRefresh() {
@@ -308,10 +837,7 @@ async function loadSectorDetail(item) {
       size: "10",
       _: String(Date.now())
     });
-    const response = await fetch(`/api/a-share-sector?${params.toString()}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    if (data.error) throw new Error(data.error);
+    const data = await fetchApiJson(`/api/a-share-sector?${params.toString()}`);
     if (state.detail.requestId !== requestId) return;
     state.detail = {
       loading: false,
@@ -320,6 +846,20 @@ async function loadSectorDetail(item) {
       requestId
     };
   } catch (error) {
+    try {
+      const data = await buildDirectAshareSectorPayload(item, 10);
+      if (state.detail.requestId !== requestId) return;
+      state.detail = {
+        loading: false,
+        error: null,
+        data,
+        requestId
+      };
+      renderSectorDetail();
+      return;
+    } catch (fallbackError) {
+      error = new Error(`${error.message}；浏览器直连也失败：${fallbackError.message}`);
+    }
     if (state.detail.requestId !== requestId) return;
     state.detail = {
       loading: false,
