@@ -1,0 +1,13 @@
+{
+  "name": "market-flow-board",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A local real-time sector capital-flow dashboard for A-shares and US sector ETF proxies.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "sh ./check.sh",
+    "start": "sh ./start.sh"
+  }
+}

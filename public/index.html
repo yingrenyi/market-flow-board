@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>板块资金流看板</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <button class="icon-button menu-button" type="button" title="菜单" aria-label="菜单">
+          <span aria-hidden="true">☰</span>
+        </button>
+        <div class="date-mark" id="dateMark">--月--日</div>
+        <div class="title-block">
+          <h1 id="pageTitle">板块主力资金流</h1>
+          <div class="subline">
+            <span id="marketSubtitle">准备加载</span>
+            <span aria-hidden="true">·</span>
+            <span id="sessionLabel">--</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <div class="segmented" role="tablist" aria-label="市场">
+            <button class="segment active" type="button" role="tab" data-market="cn">A股</button>
+            <button class="segment" type="button" role="tab" data-market="us">美股</button>
+          </div>
+          <button class="icon-button" type="button" id="refreshButton" title="刷新" aria-label="刷新">
+            <span aria-hidden="true">↻</span>
+          </button>
+          <button class="icon-button" type="button" id="autoButton" title="自动刷新" aria-label="自动刷新">
+            <span aria-hidden="true">Ⅱ</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="dashboard" aria-live="polite">
+        <section class="chart-section">
+          <div class="chart-heading">
+            <div>
+              <div class="clock" id="clock">--:--:--</div>
+              <div class="market-note" id="sourceNote">正在连接实时数据源</div>
+            </div>
+            <div class="headline-flow" id="headlineFlow">--</div>
+          </div>
+
+          <div class="stats-strip" id="statsStrip"></div>
+
+          <div class="chart-wrap" id="chartWrap">
+            <canvas id="flowCanvas" aria-label="板块资金流曲线"></canvas>
+            <div class="canvas-empty" id="canvasEmpty">加载中</div>
+            <div class="chart-tooltip" id="chartTooltip" hidden></div>
+          </div>
+
+          <footer class="footer-line">
+            <span id="updatedAt">--</span>
+            <span>仅供研究参考，不构成投资建议</span>
+          </footer>
+        </section>
+
+        <aside class="rank-panel">
+          <div class="rank-header">
+            <div>
+              <div class="rank-title">板块排行</div>
+              <div class="rank-count" id="rankCount">--</div>
+            </div>
+            <label class="search-box" title="搜索板块">
+              <span aria-hidden="true">⌕</span>
+              <input id="searchInput" type="search" placeholder="搜索" />
+            </label>
+          </div>
+          <div class="rank-list" id="rankList"></div>
+          <section class="detail-panel" id="sectorDetail" aria-live="polite"></section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
