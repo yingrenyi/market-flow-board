@@ -116,6 +116,182 @@ const DIRECT_US_ETFS = [
   { code: "XLRE", name: "房地产", secid: "107.XLRE" },
   { code: "IWM", name: "小盘股", secid: "107.IWM" }
 ];
+const DIRECT_SECTOR_STOCK_BASKETS = {
+  BK1201: [
+    ["000725", "京东方A"],
+    ["002475", "立讯精密"],
+    ["002241", "歌尔股份"],
+    ["002456", "欧菲光"],
+    ["000100", "TCL科技"],
+    ["300433", "蓝思科技"],
+    ["002384", "东山精密"],
+    ["002938", "鹏鼎控股"],
+    ["600703", "三安光电"],
+    ["300408", "三环集团"]
+  ],
+  BK1215: [
+    ["600050", "中国联通"],
+    ["000063", "中兴通讯"],
+    ["600941", "中国移动"],
+    ["300308", "中际旭创"],
+    ["300502", "新易盛"],
+    ["300394", "天孚通信"],
+    ["600522", "中天科技"],
+    ["601138", "工业富联"],
+    ["002463", "沪电股份"],
+    ["300570", "太辰光"]
+  ],
+  BK0448: [
+    ["000063", "中兴通讯"],
+    ["300308", "中际旭创"],
+    ["300502", "新易盛"],
+    ["300394", "天孚通信"],
+    ["600522", "中天科技"],
+    ["300570", "太辰光"],
+    ["002281", "光迅科技"],
+    ["300620", "光库科技"],
+    ["002929", "润建股份"],
+    ["603083", "剑桥科技"]
+  ],
+  BK1591: [
+    ["300308", "中际旭创"],
+    ["300502", "新易盛"],
+    ["300394", "天孚通信"],
+    ["002281", "光迅科技"],
+    ["300570", "太辰光"],
+    ["603083", "剑桥科技"],
+    ["300620", "光库科技"],
+    ["600498", "烽火通信"],
+    ["002463", "沪电股份"],
+    ["002916", "深南电路"]
+  ],
+  BK1038: [
+    ["000725", "京东方A"],
+    ["000100", "TCL科技"],
+    ["002456", "欧菲光"],
+    ["002273", "水晶光电"],
+    ["300433", "蓝思科技"],
+    ["600703", "三安光电"],
+    ["002387", "维信诺"],
+    ["300296", "利亚德"],
+    ["002414", "高德红外"],
+    ["002845", "同兴达"]
+  ],
+  BK1335: [
+    ["000725", "京东方A"],
+    ["000100", "TCL科技"],
+    ["002387", "维信诺"],
+    ["600707", "彩虹股份"],
+    ["000050", "深天马A"],
+    ["002876", "三利谱"],
+    ["300545", "联得装备"],
+    ["300567", "精测电子"],
+    ["688538", "和辉光电-U"],
+    ["300088", "长信科技"]
+  ],
+  BK1207: [
+    ["002230", "科大讯飞"],
+    ["300059", "东方财富"],
+    ["000977", "浪潮信息"],
+    ["603019", "中科曙光"],
+    ["600570", "恒生电子"],
+    ["300033", "同花顺"],
+    ["300454", "深信服"],
+    ["002415", "海康威视"],
+    ["002236", "大华股份"],
+    ["601360", "三六零"]
+  ],
+  BK0459: [
+    ["002463", "沪电股份"],
+    ["002916", "深南电路"],
+    ["002384", "东山精密"],
+    ["002938", "鹏鼎控股"],
+    ["300408", "三环集团"],
+    ["300476", "胜宏科技"],
+    ["600183", "生益科技"],
+    ["603228", "景旺电子"],
+    ["002371", "北方华创"],
+    ["002436", "兴森科技"]
+  ],
+  BK1340: [
+    ["002463", "沪电股份"],
+    ["002916", "深南电路"],
+    ["002938", "鹏鼎控股"],
+    ["300476", "胜宏科技"],
+    ["603228", "景旺电子"],
+    ["600183", "生益科技"],
+    ["002436", "兴森科技"],
+    ["002815", "崇达技术"],
+    ["002579", "中京电子"],
+    ["301150", "中一科技"]
+  ],
+  BK1036: [
+    ["688981", "中芯国际"],
+    ["002371", "北方华创"],
+    ["603501", "韦尔股份"],
+    ["688041", "海光信息"],
+    ["688256", "寒武纪-U"],
+    ["300661", "圣邦股份"],
+    ["600584", "长电科技"],
+    ["688012", "中微公司"],
+    ["688008", "澜起科技"],
+    ["300782", "卓胜微"]
+  ],
+  BK1200: [
+    ["300750", "宁德时代"],
+    ["002594", "比亚迪"],
+    ["300014", "亿纬锂能"],
+    ["002812", "恩捷股份"],
+    ["300274", "阳光电源"],
+    ["002459", "晶澳科技"],
+    ["601012", "隆基绿能"],
+    ["002129", "TCL中环"],
+    ["300124", "汇川技术"],
+    ["300316", "晶盛机电"]
+  ],
+  BK1037: [
+    ["002475", "立讯精密"],
+    ["002241", "歌尔股份"],
+    ["300433", "蓝思科技"],
+    ["002456", "欧菲光"],
+    ["002384", "东山精密"],
+    ["002938", "鹏鼎控股"],
+    ["603986", "兆易创新"],
+    ["300115", "长盈精密"],
+    ["002600", "领益智造"],
+    ["300661", "圣邦股份"]
+  ],
+  BK1338: [
+    ["002475", "立讯精密"],
+    ["002241", "歌尔股份"],
+    ["300433", "蓝思科技"],
+    ["002456", "欧菲光"],
+    ["002384", "东山精密"],
+    ["002938", "鹏鼎控股"],
+    ["300115", "长盈精密"],
+    ["002600", "领益智造"],
+    ["601138", "工业富联"],
+    ["002635", "安洁科技"]
+  ]
+};
+const DIRECT_SECTOR_KEYWORD_BASKETS = [
+  ["半导体", "BK1036"],
+  ["芯片", "BK1036"],
+  ["通信", "BK1215"],
+  ["光模块", "BK1591"],
+  ["光通信", "BK1591"],
+  ["面板", "BK1335"],
+  ["光学", "BK1038"],
+  ["消费电子", "BK1037"],
+  ["电子", "BK1201"],
+  ["计算机", "BK1207"],
+  ["软件", "BK1207"],
+  ["元件", "BK0459"],
+  ["印制电路", "BK1340"],
+  ["PCB", "BK1340"],
+  ["电力设备", "BK1200"],
+  ["新能源", "BK1200"]
+];
 
 function init() {
   updateDateClock();
@@ -468,6 +644,137 @@ async function buildDirectAshareSectorPayload(item, size = 10) {
     valueLabel: "主力净流入",
     stocks
   };
+}
+
+async function buildFallbackSectorPayload(item, size = 10) {
+  const basket = getSectorStockBasket(item).slice(0, size);
+  if (!basket.length) {
+    throw new Error("暂无这个板块的内置关联股票");
+  }
+
+  let quoteMap = new Map();
+  try {
+    quoteMap = await fetchSinaQuotes(basket);
+  } catch {
+    quoteMap = new Map();
+  }
+
+  const stocks = basket.map((stock, index) => {
+    const quote = quoteMap.get(stock.code);
+    return {
+      code: stock.code,
+      market: getAshareMarket(stock.code),
+      name: quote?.name || stock.name,
+      rank: index + 1,
+      price: quote?.price ?? null,
+      pct: quote?.pct ?? null,
+      change: quote?.change ?? null,
+      volume: quote?.volume ?? null,
+      amount: quote?.amount ?? null,
+      value: null,
+      superFlow: null,
+      largeFlow: null,
+      mediumFlow: null,
+      smallFlow: null,
+      share: null,
+      updatedAtMs: quote?.updatedAtMs || Date.now()
+    };
+  });
+  const updatedAtMs = Math.max(0, ...stocks.map((stock) => stock.updatedAtMs || 0));
+
+  return {
+    market: "cn",
+    sector: {
+      code: item.code,
+      name: item.name,
+      total: stocks.length
+    },
+    title: `${item.name || item.code} 关联个股Top${stocks.length}`,
+    source: quoteMap.size ? "新浪实时行情（关联股票兜底）" : "内置关联股票（行情暂不可用）",
+    generatedAt: new Date().toISOString(),
+    updatedAt: updatedAtMs ? new Date(updatedAtMs).toISOString() : null,
+    currency: "CNY",
+    unitLabel: "亿元",
+    valueLabel: "主力净流入",
+    fallback: true,
+    stocks
+  };
+}
+
+function getSectorStockBasket(item) {
+  const exact = DIRECT_SECTOR_STOCK_BASKETS[item.code];
+  if (exact) return exact.map(([code, name]) => ({ code, name }));
+
+  const text = `${item.name || ""} ${item.rawName || ""}`.toUpperCase();
+  const matched = DIRECT_SECTOR_KEYWORD_BASKETS.find(([keyword]) => text.includes(keyword.toUpperCase()));
+  const fallbackCode = matched?.[1] || "BK1201";
+  return (DIRECT_SECTOR_STOCK_BASKETS[fallbackCode] || []).map(([code, name]) => ({ code, name }));
+}
+
+function fetchSinaQuotes(stocks, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const symbols = stocks.map((stock) => sinaSymbol(stock.code));
+    const script = document.createElement("script");
+    let settled = false;
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      script.remove();
+    };
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+    const timer = window.setTimeout(() => {
+      finish(reject, new Error("Sina quote timeout"));
+    }, timeoutMs);
+
+    script.onload = () => {
+      const quotes = new Map();
+      symbols.forEach((symbol) => {
+        const quote = parseSinaQuote(symbol, window[`hq_str_${symbol}`]);
+        if (quote) quotes.set(quote.code, quote);
+      });
+      finish(resolve, quotes);
+    };
+    script.onerror = () => finish(reject, new Error("Sina quote network error"));
+    script.charset = "GBK";
+    script.referrerPolicy = "no-referrer";
+    script.src = `https://hq.sinajs.cn/list=${symbols.join(",")}`;
+    document.head.appendChild(script);
+  });
+}
+
+function parseSinaQuote(symbol, raw) {
+  if (!raw) return null;
+  const parts = String(raw).split(",");
+  if (parts.length < 32 || !parts[0]) return null;
+  const code = symbol.slice(2);
+  const previousClose = safeNumber(parts[2], null);
+  const price = safeNumber(parts[3], null);
+  const change = Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : null;
+  const pct = Number.isFinite(change) && previousClose ? (change / previousClose) * 100 : null;
+  const timestamp = Date.parse(`${parts[30]}T${parts[31]}+08:00`);
+
+  return {
+    code,
+    name: parts[0],
+    price,
+    pct,
+    change,
+    volume: safeNumber(parts[8], null),
+    amount: safeNumber(parts[9], null),
+    updatedAtMs: Number.isFinite(timestamp) ? timestamp : Date.now()
+  };
+}
+
+function sinaSymbol(code) {
+  return `${code.startsWith("6") || code.startsWith("9") ? "sh" : "sz"}${code}`;
+}
+
+function getAshareMarket(code) {
+  return code.startsWith("6") || code.startsWith("9") ? 1 : 0;
 }
 
 function normalizeDirectAshareStock(row, rank) {
@@ -883,7 +1190,22 @@ async function loadSectorDetail(item) {
       renderSectorDetail();
       return;
     } catch (fallbackError) {
-      error = new Error(`${error.message}；浏览器直连也失败：${fallbackError.message}`);
+      try {
+        const data = await buildFallbackSectorPayload(item, 10);
+        if (state.detail.requestId !== requestId) return;
+        state.detail = {
+          loading: false,
+          error: null,
+          data,
+          requestId
+        };
+        renderSectorDetail();
+        return;
+      } catch (basketError) {
+        error = new Error(
+          `${error.message}；浏览器直连也失败：${fallbackError.message}；关联股票兜底也失败：${basketError.message}`
+        );
+      }
     }
     if (state.detail.requestId !== requestId) return;
     state.detail = {
@@ -927,19 +1249,22 @@ function renderSectorDetail() {
   }
 
   const rows = stocks
-    .map(
-      (stock) => `
+    .map((stock) => {
+      const hasFlow = Number.isFinite(stock.value);
+      const flowTone = hasFlow ? (stock.value >= 0 ? "red" : "green") : "muted";
+      const pctTone = Number.isFinite(stock.pct) ? (stock.pct >= 0 ? "red" : "green") : "muted";
+      return `
         <div class="stock-row">
           <div class="stock-rank">${String(stock.rank).padStart(2, "0")}</div>
           <div class="stock-main">
             <div class="stock-name">${escapeHtml(stock.name)}</div>
             <div class="stock-code">${escapeHtml(stock.code)} · ${escapeHtml(formatPrice(stock.price))}</div>
           </div>
-          <div class="stock-flow ${stock.value >= 0 ? "red" : "green"}">${escapeHtml(formatMoney(stock.value, data))}</div>
-          <div class="stock-pct ${stock.pct >= 0 ? "red" : "green"}">${escapeHtml(formatPct(stock.pct))}</div>
+          <div class="stock-flow ${flowTone}">${escapeHtml(hasFlow ? formatMoney(stock.value, data) : "--")}</div>
+          <div class="stock-pct ${pctTone}">${escapeHtml(formatPct(stock.pct))}</div>
         </div>
-      `
-    )
+      `;
+    })
     .join("");
 
   els.sectorDetail.innerHTML = detailShell(
@@ -957,11 +1282,16 @@ function renderSectorDetail() {
 }
 
 function detailShell(sector, body) {
+  const data = state.detail.data;
+  const title = data?.fallback ? `${sector.name} 关联个股Top10` : `${sector.name} 个股流入Top10`;
+  const subtitle = data?.fallback
+    ? `${sector.code} · 行情兜底，资金流暂不可用`
+    : `${sector.code} · ${state.market === "cn" ? "主力净流入排序" : "ETF代理口径"}`;
   return `
     <div class="detail-header">
       <div>
-        <div class="detail-title">${escapeHtml(sector.name)} 个股流入Top10</div>
-        <div class="detail-subtitle">${escapeHtml(sector.code)} · ${state.market === "cn" ? "主力净流入排序" : "ETF代理口径"}</div>
+        <div class="detail-title">${escapeHtml(title)}</div>
+        <div class="detail-subtitle">${escapeHtml(subtitle)}</div>
       </div>
       <button class="detail-close" type="button" title="关闭" aria-label="关闭详情">×</button>
     </div>
