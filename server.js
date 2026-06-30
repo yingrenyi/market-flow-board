@@ -15,8 +15,16 @@ const REQUEST_HEADERS = {
   "user-agent":
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
 };
+const NEWS_HEADERS = {
+  "accept": "application/rss+xml,application/xml,text/xml,text/plain,*/*",
+  "user-agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+};
 
 const A_SHARE_FIELDS = [
+  "f3",
+  "f6",
+  "f8",
   "f12",
   "f14",
   "f62",
@@ -28,8 +36,19 @@ const A_SHARE_FIELDS = [
   "f81",
   "f84",
   "f87",
+  "f104",
+  "f105",
+  "f106",
+  "f107",
+  "f109",
   "f124",
-  "f184"
+  "f164",
+  "f165",
+  "f184",
+  "f222",
+  "f225",
+  "f267",
+  "f268"
 ].join(",");
 
 const A_SHARE_STOCK_FIELDS = [
@@ -81,7 +100,102 @@ const US_ETFS = [
   { code: "IWM", name: "小盘股", secid: "107.IWM" }
 ];
 
+const HOTSPOT_TTL_MS = 30 * 60 * 1000;
+const HOTSPOT_TOPICS = [
+  {
+    id: "storage",
+    label: "存储",
+    query: "存储芯片 DRAM NAND HBM A股 半导体 景气",
+    keywords: ["存储", "存储芯片", "DRAM", "NAND", "HBM", "闪迪", "SK海力士", "美光", "长江存储", "佰维存储", "江波龙"]
+  },
+  {
+    id: "space",
+    label: "商业航天",
+    query: "商业航天 卫星互联网 火箭 发射 A股 低空经济",
+    keywords: ["商业航天", "卫星互联网", "卫星", "火箭", "发射", "航天", "低轨", "星链", "北斗", "中国星网"]
+  },
+  {
+    id: "semiconductor",
+    label: "半导体",
+    query: "半导体 国产替代 封测 设备 材料 A股",
+    keywords: ["半导体", "封测", "设备", "材料", "晶圆", "光刻", "英飞凌", "台积电", "中芯国际", "北方华创", "中微公司", "华特气体"]
+  },
+  {
+    id: "chip",
+    label: "芯片",
+    query: "芯片 AI芯片 GPU 算力 国产芯片 A股",
+    keywords: ["芯片", "AI芯片", "GPU", "算力", "英伟达", "寒武纪", "海光信息", "昇腾", "国产芯片", "CPU", "SOC"]
+  }
+];
+const HOTSPOT_POSITIVE_KEYWORDS = [
+  "利好",
+  "上调",
+  "突破",
+  "增长",
+  "大涨",
+  "走强",
+  "中标",
+  "订单",
+  "扩产",
+  "量产",
+  "投产",
+  "涨价",
+  "供不应求",
+  "政策支持",
+  "补贴",
+  "获批",
+  "发射成功",
+  "国产替代",
+  "景气",
+  "复苏",
+  "回暖",
+  "盈利",
+  "创新高",
+  "合作"
+];
+const HOTSPOT_NEGATIVE_KEYWORDS = [
+  "利空",
+  "下调",
+  "亏损",
+  "预亏",
+  "大跌",
+  "暴跌",
+  "走弱",
+  "制裁",
+  "禁令",
+  "限制",
+  "处罚",
+  "调查",
+  "风险提示",
+  "事故",
+  "失败",
+  "延期",
+  "减产",
+  "裁员",
+  "跌价",
+  "需求疲弱",
+  "低迷",
+  "风险",
+  "回落",
+  "取消",
+  "撤回",
+  "暂无",
+  "尚未",
+  "未取得",
+  "未应用",
+  "没有产品",
+  "不会产生",
+  "收入规模较小",
+  "影响极小",
+  "不确定性"
+];
+
 const memoryCache = new Map();
+const hotspotCache = {
+  storedAt: 0,
+  payload: null,
+  pending: null
+};
 
 function makeUrl(base, params) {
   const url = new URL(base);
@@ -112,6 +226,56 @@ async function fetchJson(url, ttlMs = 15000) {
     if (body && Number(body.rc) !== 0) {
       throw new Error(`Eastmoney rc=${body.rc}`);
     }
+    memoryCache.set(url, { storedAt: now, body });
+    return body;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchText(url, ttlMs = HOTSPOT_TTL_MS) {
+  const cached = memoryCache.get(url);
+  const now = Date.now();
+  if (cached && now - cached.storedAt < ttlMs) {
+    return cached.body;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(url, {
+      headers: NEWS_HEADERS,
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} from ${new URL(url).hostname}`);
+    }
+    const body = await response.text();
+    memoryCache.set(url, { storedAt: now, body });
+    return body;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchNewsJson(url, ttlMs = HOTSPOT_TTL_MS) {
+  const cached = memoryCache.get(url);
+  const now = Date.now();
+  if (cached && now - cached.storedAt < ttlMs) {
+    return cached.body;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(url, {
+      headers: NEWS_HEADERS,
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} from ${new URL(url).hostname}`);
+    }
+    const body = await response.json();
     memoryCache.set(url, { storedAt: now, body });
     return body;
   } finally {
@@ -283,12 +447,26 @@ function normalizeAshareRow(row, side, rank) {
     name: String(row.f14 || ""),
     side,
     rank,
+    pct: safeNumber(row.f3, null),
+    amount: safeNumber(row.f6, null),
+    turnover: safeNumber(row.f8, null),
     value: safeNumber(row.f62),
     superFlow: safeNumber(row.f66),
     largeFlow: safeNumber(row.f72),
     mediumFlow: safeNumber(row.f78),
     smallFlow: safeNumber(row.f84),
     share: safeNumber(row.f184),
+    upCount: safeNumber(row.f104, null),
+    downCount: safeNumber(row.f105, null),
+    flatCount: safeNumber(row.f106, null),
+    haltCount: safeNumber(row.f107, null),
+    pct5: safeNumber(row.f109, null),
+    flow5: safeNumber(row.f164, null),
+    flow5Ratio: safeNumber(row.f165, null),
+    flow10: safeNumber(row.f267, null),
+    flow10Ratio: safeNumber(row.f268, null),
+    crowdingFlag: safeNumber(row.f222, null),
+    breadthScore: safeNumber(row.f225, null),
     updatedAtMs: unixSecondsToMs(row.f124),
     rawName: String(row.f14 || "")
   };
@@ -530,6 +708,312 @@ async function buildUsPayload() {
   });
 }
 
+async function buildHotspotPayload(reqUrl) {
+  const force = reqUrl.searchParams.get("force") === "1";
+  const now = Date.now();
+  if (!force && hotspotCache.payload && now - hotspotCache.storedAt < HOTSPOT_TTL_MS) {
+    return {
+      ...hotspotCache.payload,
+      cached: true
+    };
+  }
+  if (!force && hotspotCache.pending) {
+    return hotspotCache.pending;
+  }
+
+  hotspotCache.pending = refreshHotspots()
+    .then((payload) => {
+      hotspotCache.payload = payload;
+      hotspotCache.storedAt = Date.now();
+      return payload;
+    })
+    .finally(() => {
+      hotspotCache.pending = null;
+    });
+
+  return hotspotCache.pending;
+}
+
+async function refreshHotspots() {
+  let corpus = [];
+  let corpusError = null;
+  try {
+    corpus = await fetchEastmoneyFastNewsCorpus();
+  } catch (error) {
+    corpusError = error.message;
+  }
+
+  const topics = await Promise.all(
+    HOTSPOT_TOPICS.map(async (topic) => {
+      const fastNewsItems = filterHotspotCorpus(corpus, topic);
+      if (fastNewsItems.length || !corpusError) {
+        return buildTopicSummary(topic, uniqueHotspotItems(fastNewsItems).slice(0, 8), corpusError);
+      }
+
+      try {
+        const items = await fetchHotspotTopic(topic);
+        return buildTopicSummary(topic, uniqueHotspotItems(items).slice(0, 8));
+      } catch (error) {
+        return buildTopicSummary(topic, [], `${corpusError}; ${error.message}`);
+      }
+    })
+  );
+  const generatedAt = new Date().toISOString();
+  return {
+    source: "东方财富快讯",
+    sourceUrl: "https://kuaixun.eastmoney.com/",
+    generatedAt,
+    updatedAt: generatedAt,
+    nextUpdateAt: new Date(Date.now() + HOTSPOT_TTL_MS).toISOString(),
+    ttlMs: HOTSPOT_TTL_MS,
+    topics
+  };
+}
+
+async function fetchEastmoneyFastNewsCorpus() {
+  const columns = ["101", "102"];
+  const responses = await Promise.all(columns.map((column) => fetchEastmoneyFastNews(column)));
+  return uniqueHotspotItems(responses.flat()).sort(
+    (a, b) => Date.parse(b.publishedAt || 0) - Date.parse(a.publishedAt || 0)
+  );
+}
+
+async function fetchEastmoneyFastNews(fastColumn) {
+  const url = makeUrl("https://np-weblist.eastmoney.com/comm/web/getFastNewsList", {
+    client: "web",
+    biz: "web_news_flash",
+    fastColumn,
+    sortEnd: 0,
+    pageSize: 80,
+    req_trace: Date.now()
+  });
+  const json = await fetchNewsJson(url, HOTSPOT_TTL_MS);
+  if (String(json.code) !== "1") {
+    throw new Error(`Eastmoney fast news code=${json.code || "unknown"}`);
+  }
+  return (json.data?.fastNewsList || []).map(normalizeEastmoneyFastNews).filter(Boolean);
+}
+
+function normalizeEastmoneyFastNews(row) {
+  const title = String(row.title || "").trim();
+  const summary = stripHtml(String(row.summary || "")).replace(/^【[^】]+】/, "").trim();
+  if (!title && !summary) return null;
+  const publishedAt = parseBeijingDateTime(row.showTime);
+  const text = `${title} ${summary}`;
+  return {
+    id: hashString(`eastmoney:${row.code || title}`),
+    title: title || limitText(summary, 44),
+    summary: limitText(summary, 110),
+    url: row.code ? `https://finance.eastmoney.com/a/${row.code}.html` : "https://kuaixun.eastmoney.com/",
+    source: "东方财富快讯",
+    publishedAt,
+    sentiment: classifyHotspot(text),
+    stockList: row.stockList || [],
+    rawText: text
+  };
+}
+
+function filterHotspotCorpus(items, topic) {
+  const keywords = topic.keywords || [topic.label];
+  return items
+    .filter((item) => {
+      const text = `${item.title} ${item.summary} ${item.rawText || ""}`.toLowerCase();
+      return keywords.some((keyword) => text.includes(String(keyword).toLowerCase()));
+    })
+    .map((item) => ({
+      ...item,
+      topicId: topic.id,
+      topicLabel: topic.label
+    }));
+}
+
+async function fetchHotspotTopic(topic) {
+  const url = makeUrl("https://www.bing.com/news/search", {
+    q: topic.query,
+    format: "rss",
+    setlang: "zh-CN",
+    cc: "CN"
+  });
+  const xml = await fetchText(url, HOTSPOT_TTL_MS);
+  return parseRssItems(xml, topic);
+}
+
+function parseRssItems(xml, topic) {
+  const blocks = String(xml).match(/<item\b[\s\S]*?<\/item>/gi) || [];
+  return blocks
+    .map((block) => {
+      const rawTitle = decodeXml(stripCdata(extractTag(block, "title")));
+      const link = decodeXml(stripCdata(extractTag(block, "link")));
+      const source = decodeXml(stripCdata(extractTag(block, "source"))) || hostnameFromUrl(link);
+      const title = cleanHotspotTitle(rawTitle, source);
+      const summary = limitText(stripHtml(decodeXml(stripCdata(extractTag(block, "description")))), 110);
+      const publishedAt = parseNewsDate(decodeXml(stripCdata(extractTag(block, "pubDate"))));
+      const sentiment = classifyHotspot(`${title} ${summary}`);
+      if (!title || !link) return null;
+      return {
+        id: hashString(`${topic.id}:${normalizeHotspotKey(title)}:${link}`),
+        topicId: topic.id,
+        topicLabel: topic.label,
+        title,
+        summary,
+        url: link,
+        source,
+        publishedAt,
+        sentiment
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(b.publishedAt || 0) - Date.parse(a.publishedAt || 0));
+}
+
+function buildTopicSummary(topic, items, error = null) {
+  return {
+    id: topic.id,
+    label: topic.label,
+    query: topic.query,
+    error,
+    counts: {
+      positive: items.filter((item) => item.sentiment.tone === "positive").length,
+      negative: items.filter((item) => item.sentiment.tone === "negative").length,
+      neutral: items.filter((item) => item.sentiment.tone === "neutral").length
+    },
+    items
+  };
+}
+
+function uniqueHotspotItems(items) {
+  const seen = new Set();
+  const unique = [];
+  for (const item of items) {
+    const key = normalizeHotspotKey(item.title);
+    const urlKey = normalizeHotspotUrl(item.url);
+    if (seen.has(key) || seen.has(urlKey)) continue;
+    seen.add(key);
+    if (urlKey) seen.add(urlKey);
+    unique.push(item);
+  }
+  return unique;
+}
+
+function classifyHotspot(text) {
+  const value = String(text || "");
+  const positiveHits = HOTSPOT_POSITIVE_KEYWORDS.filter((word) => value.includes(word));
+  const negativeHits = HOTSPOT_NEGATIVE_KEYWORDS.filter((word) => value.includes(word));
+  if (positiveHits.length > negativeHits.length) {
+    return {
+      label: "利好",
+      tone: "positive",
+      score: positiveHits.length - negativeHits.length,
+      reasons: positiveHits.slice(0, 3)
+    };
+  }
+  if (negativeHits.length > positiveHits.length) {
+    return {
+      label: "利空",
+      tone: "negative",
+      score: negativeHits.length - positiveHits.length,
+      reasons: negativeHits.slice(0, 3)
+    };
+  }
+  return {
+    label: "中性",
+    tone: "neutral",
+    score: 0,
+    reasons: []
+  };
+}
+
+function extractTag(text, tagName) {
+  const match = String(text).match(new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i"));
+  return match ? match[1].trim() : "";
+}
+
+function stripCdata(value) {
+  return String(value || "").replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "").trim();
+}
+
+function decodeXml(value) {
+  return String(value || "")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, number) => String.fromCodePoint(parseInt(number, 10)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function stripHtml(value) {
+  return String(value || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanHotspotTitle(title, source) {
+  const normalized = String(title || "").replace(/\s+/g, " ").trim();
+  if (!source) return normalized;
+  return normalized.replace(new RegExp(`\\s+-\\s+${escapeRegExp(source)}$`, "i"), "").trim();
+}
+
+function limitText(value, length) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= length) return text;
+  return `${text.slice(0, length - 1)}…`;
+}
+
+function parseNewsDate(value) {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function parseBeijingDateTime(value) {
+  if (!value) return null;
+  const normalized = `${String(value).trim().replace(" ", "T")}+08:00`;
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function normalizeHotspotKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\s《》「」"“”'‘’：:，,。.!！?？\-_/\\|()[\]【】]+/g, "")
+    .slice(0, 80);
+}
+
+function normalizeHotspotUrl(value) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    url.searchParams.delete("utm_source");
+    url.searchParams.delete("utm_medium");
+    url.searchParams.delete("utm_campaign");
+    return url.href.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function hostnameFromUrl(value) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function hashString(value) {
+  let hash = 5381;
+  for (const char of String(value)) {
+    hash = (hash * 33) ^ char.charCodeAt(0);
+  }
+  return `h${(hash >>> 0).toString(36)}`;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function buildPayload(config) {
   const items = [...config.items].sort((a, b) => b.value - a.value);
   const inflow = items.filter((item) => item.value >= 0);
@@ -669,6 +1153,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (reqUrl.pathname === "/api/us") {
       sendJson(response, 200, await buildUsPayload());
+      return;
+    }
+    if (reqUrl.pathname === "/api/hotspots") {
+      sendJson(response, 200, await buildHotspotPayload(reqUrl));
       return;
     }
     if (reqUrl.pathname === "/api/health") {

@@ -11,6 +11,16 @@ const state = {
     data: null,
     requestId: 0
   },
+  hotspots: {
+    loading: false,
+    error: null,
+    data: null,
+    activeTopicId: "storage",
+    timer: null
+  },
+  decision: {
+    activeView: "persistence"
+  },
   search: "",
   hover: null,
   autoRefresh: true,
@@ -26,6 +36,7 @@ const els = {
   sourceNote: document.getElementById("sourceNote"),
   headlineFlow: document.getElementById("headlineFlow"),
   statsStrip: document.getElementById("statsStrip"),
+  decisionPanel: document.getElementById("decisionPanel"),
   chartWrap: document.getElementById("chartWrap"),
   canvas: document.getElementById("flowCanvas"),
   canvasEmpty: document.getElementById("canvasEmpty"),
@@ -34,6 +45,7 @@ const els = {
   rankCount: document.getElementById("rankCount"),
   rankList: document.getElementById("rankList"),
   sectorDetail: document.getElementById("sectorDetail"),
+  hotspotPanel: document.getElementById("hotspotPanel"),
   searchInput: document.getElementById("searchInput"),
   refreshButton: document.getElementById("refreshButton"),
   autoButton: document.getElementById("autoButton"),
@@ -56,6 +68,9 @@ const DIRECT_PUSH2_HOSTS = [
   "https://60.push2.eastmoney.com"
 ];
 const DIRECT_A_SHARE_FIELDS = [
+  "f3",
+  "f6",
+  "f8",
   "f12",
   "f14",
   "f62",
@@ -67,8 +82,19 @@ const DIRECT_A_SHARE_FIELDS = [
   "f81",
   "f84",
   "f87",
+  "f104",
+  "f105",
+  "f106",
+  "f107",
+  "f109",
   "f124",
-  "f184"
+  "f164",
+  "f165",
+  "f184",
+  "f222",
+  "f225",
+  "f267",
+  "f268"
 ].join(",");
 const DIRECT_A_SHARE_STOCK_FIELDS = [
   "f12",
@@ -292,6 +318,21 @@ const DIRECT_SECTOR_KEYWORD_BASKETS = [
   ["电力设备", "BK1200"],
   ["新能源", "BK1200"]
 ];
+const DECISION_VIEWS = [
+  ["persistence", "持续性"],
+  ["heat", "热度雷达"],
+  ["risk", "风险灯"],
+  ["tail", "尾盘"],
+  ["checklist", "明日清单"]
+];
+const HEAT_DIRECTIONS = [
+  { label: "AI算力", keywords: ["算力", "AI", "服务器", "CPO", "光模块", "液冷"] },
+  { label: "CPO", keywords: ["CPO", "光模块", "光通信", "通信网络设备"] },
+  { label: "半导体", keywords: ["半导体", "芯片", "集成电路", "封测"] },
+  { label: "机器人", keywords: ["机器人", "减速器", "执行器", "人形"] },
+  { label: "军工", keywords: ["军工", "航天", "航空", "卫星", "国防"] },
+  { label: "黄金", keywords: ["黄金", "贵金属", "有色"] }
+];
 
 function init() {
   updateDateClock();
@@ -302,10 +343,12 @@ function init() {
   });
   els.refreshButton.addEventListener("click", () => loadMarket(state.market, true));
   els.autoButton.addEventListener("click", toggleAutoRefresh);
+  els.decisionPanel.addEventListener("click", handleDecisionClick);
   els.searchInput.addEventListener("input", (event) => {
     state.search = event.target.value.trim().toLowerCase();
     renderRank();
   });
+  els.hotspotPanel.addEventListener("click", handleHotspotClick);
 
   els.canvas.addEventListener("mousemove", handleHover);
   els.canvas.addEventListener("mouseleave", () => {
@@ -316,6 +359,7 @@ function init() {
 
   new ResizeObserver(drawChart).observe(els.chartWrap);
   loadMarket("cn");
+  loadHotspots();
 }
 
 function updateDateClock() {
@@ -415,6 +459,131 @@ function applyMarketData(data) {
 
 function loadDirectMarket(market) {
   return market === "cn" ? buildDirectAsharePayload() : buildDirectUsPayload();
+}
+
+async function loadHotspots(force = false) {
+  if (state.hotspots.loading && !force) return;
+  state.hotspots.loading = true;
+  state.hotspots.error = null;
+  renderHotspots();
+
+  try {
+    const query = force ? `?force=1&_=${Date.now()}` : `?_=${Date.now()}`;
+    const data = await fetchApiJson(`/api/hotspots${query}`);
+    state.hotspots.data = data;
+    const topics = data.topics || [];
+    if (!topics.some((topic) => topic.id === state.hotspots.activeTopicId)) {
+      state.hotspots.activeTopicId = topics[0]?.id || "storage";
+    }
+  } catch (error) {
+    state.hotspots.error = error.message;
+  } finally {
+    state.hotspots.loading = false;
+    renderHotspots();
+    scheduleHotspotsRefresh();
+  }
+}
+
+function scheduleHotspotsRefresh() {
+  window.clearTimeout(state.hotspots.timer);
+  state.hotspots.timer = window.setTimeout(() => loadHotspots(), 30 * 60 * 1000);
+}
+
+function handleHotspotClick(event) {
+  const topicButton = event.target.closest("[data-hot-topic]");
+  if (topicButton) {
+    state.hotspots.activeTopicId = topicButton.dataset.hotTopic;
+    renderHotspots();
+    return;
+  }
+
+  const refreshButton = event.target.closest("[data-hot-refresh]");
+  if (refreshButton) {
+    loadHotspots(true);
+  }
+}
+
+function handleDecisionClick(event) {
+  const button = event.target.closest("[data-decision-view]");
+  if (!button) return;
+  state.decision.activeView = button.dataset.decisionView;
+  renderDecisionPanel();
+}
+
+function renderHotspots() {
+  const view = state.hotspots;
+  const data = view.data;
+  const topics = data?.topics || [];
+  const activeTopic = topics.find((topic) => topic.id === view.activeTopicId) || topics[0] || null;
+  const updatedText = data?.updatedAt ? formatRelativeTime(data.updatedAt) : "--";
+  const statusText = view.loading ? "更新中" : view.error ? "数据异常" : `${updatedText}更新`;
+
+  if (!data && view.loading) {
+    els.hotspotPanel.innerHTML = hotspotShell("更新中", `<div class="hotspot-empty">热点加载中</div>`);
+    return;
+  }
+
+  if (!data && view.error) {
+    els.hotspotPanel.innerHTML = hotspotShell("数据异常", `<div class="hotspot-empty">${escapeHtml(view.error)}</div>`);
+    return;
+  }
+
+  const tabs = topics
+    .map(
+      (topic) => `
+        <button class="hotspot-tab ${topic.id === activeTopic?.id ? "active" : ""}" type="button" data-hot-topic="${escapeAttr(topic.id)}">
+          ${escapeHtml(topic.label)}
+        </button>
+      `
+    )
+    .join("");
+  const tabBlock = `<div class="hotspot-tabs">${tabs}</div>`;
+
+  if (!activeTopic) {
+    els.hotspotPanel.innerHTML = hotspotShell(statusText, `${tabBlock}<div class="hotspot-empty">暂无热点</div>`);
+    return;
+  }
+
+  const items = activeTopic.items || [];
+  const countLine = `${activeTopic.counts?.positive || 0}利好 / ${activeTopic.counts?.negative || 0}利空`;
+  const list = items.length
+    ? `<div class="hotspot-list">${items.map(hotspotRow).join("")}</div>`
+    : `<div class="hotspot-empty">${escapeHtml(activeTopic.error || "暂无热点")}</div>`;
+
+  els.hotspotPanel.innerHTML = hotspotShell(
+    `${statusText} · ${countLine}`,
+    `${tabBlock}${list}<div class="hotspot-foot">来源：${escapeHtml(data.source || "News RSS")} · 30分钟自动更新</div>`
+  );
+}
+
+function hotspotShell(statusText, body) {
+  return `
+    <div class="hotspot-header">
+      <div>
+        <div class="hotspot-title">热点观察</div>
+        <div class="hotspot-status">${escapeHtml(statusText)}</div>
+      </div>
+      <button class="hotspot-refresh" type="button" data-hot-refresh title="刷新热点" aria-label="刷新热点">↻</button>
+    </div>
+    ${body}
+  `;
+}
+
+function hotspotRow(item) {
+  const tone = item.sentiment?.tone || "neutral";
+  const label = item.sentiment?.label || "中性";
+  const reason = item.sentiment?.reasons?.length ? ` · ${item.sentiment.reasons.join("、")}` : "";
+  return `
+    <a class="hotspot-item" href="${escapeAttr(item.url)}" target="_blank" rel="noopener noreferrer">
+      <div class="hotspot-item-head">
+        <span class="sentiment ${tone}">${escapeHtml(label)}</span>
+        <span class="hotspot-source">${escapeHtml(item.source || "新闻")}${escapeHtml(reason)}</span>
+      </div>
+      <div class="hotspot-item-title">${escapeHtml(item.title)}</div>
+      ${item.summary ? `<div class="hotspot-summary">${escapeHtml(item.summary)}</div>` : ""}
+      <div class="hotspot-meta">${escapeHtml(formatRelativeTime(item.publishedAt))}</div>
+    </a>
+  `;
 }
 
 function jsonpFetch(base, params = {}, timeoutMs = 12000) {
@@ -592,12 +761,26 @@ function normalizeDirectAshareRow(row, side, rank) {
     name: String(row.f14 || ""),
     side,
     rank,
+    pct: safeNumber(row.f3, null),
+    amount: safeNumber(row.f6, null),
+    turnover: safeNumber(row.f8, null),
     value: safeNumber(row.f62),
     superFlow: safeNumber(row.f66),
     largeFlow: safeNumber(row.f72),
     mediumFlow: safeNumber(row.f78),
     smallFlow: safeNumber(row.f84),
     share: safeNumber(row.f184),
+    upCount: safeNumber(row.f104, null),
+    downCount: safeNumber(row.f105, null),
+    flatCount: safeNumber(row.f106, null),
+    haltCount: safeNumber(row.f107, null),
+    pct5: safeNumber(row.f109, null),
+    flow5: safeNumber(row.f164, null),
+    flow5Ratio: safeNumber(row.f165, null),
+    flow10: safeNumber(row.f267, null),
+    flow10Ratio: safeNumber(row.f268, null),
+    crowdingFlag: safeNumber(row.f222, null),
+    breadthScore: safeNumber(row.f225, null),
     updatedAtMs: unixSecondsToMs(row.f124),
     rawName: String(row.f14 || "")
   };
@@ -1006,6 +1189,7 @@ function scheduleRefresh() {
 function renderAll() {
   renderHeader();
   renderStats();
+  renderDecisionPanel();
   renderRank();
   renderSectorDetail();
   drawChart();
@@ -1072,6 +1256,437 @@ function renderStats() {
       `
     )
     .join("");
+}
+
+function renderDecisionPanel() {
+  const data = state.data;
+  if (!data?.items?.length) {
+    els.decisionPanel.innerHTML = `
+      <div class="decision-empty">等待资金数据后生成决策看板</div>
+    `;
+    return;
+  }
+
+  const metrics = buildDecisionMetrics(data);
+  const activeView = state.decision.activeView;
+  const tabs = DECISION_VIEWS.map(
+    ([id, label]) => `
+      <button class="decision-tab ${id === activeView ? "active" : ""}" type="button" data-decision-view="${escapeAttr(id)}">
+        ${escapeHtml(label)}
+      </button>
+    `
+  ).join("");
+
+  const content =
+    activeView === "heat"
+      ? renderHeatRadar(metrics, data)
+      : activeView === "risk"
+        ? renderRiskLights(metrics, data)
+        : activeView === "tail"
+          ? renderTailFlow(metrics, data)
+          : activeView === "checklist"
+            ? renderNextChecklist(metrics)
+            : renderPersistence(metrics, data);
+
+  els.decisionPanel.innerHTML = `
+    <div class="decision-head">
+      <div>
+        <div class="decision-title">决策看板</div>
+        <div class="decision-subtitle">持续性、主线热度、风险和尾盘承接</div>
+      </div>
+      <div class="decision-tabs">${tabs}</div>
+    </div>
+    ${content}
+  `;
+}
+
+function buildDecisionMetrics(data) {
+  const items = data.items || [];
+  const amounts = items.map((item) => finiteOrNull(item.amount)).filter(Number.isFinite).sort((a, b) => a - b);
+  const medianAmount = amounts.length ? amounts[Math.floor(amounts.length / 2)] || 1 : 1;
+  const maxAbsFlow = Math.max(
+    1,
+    ...items.flatMap((item) => [item.value, item.flow5, item.flow10]).map((value) => Math.abs(finiteOrZero(value)))
+  );
+
+  return items.map((item) => {
+    const tail = calcIntradaySegments(item.points || []);
+    const today = finiteOrZero(item.value);
+    const flow5 = finiteOrNull(item.flow5);
+    const flow10 = finiteOrNull(item.flow10);
+    const flow3 = estimateThreeDayFlow(item, flow5);
+    const pct = finiteOrNull(item.pct);
+    const pct5 = finiteOrNull(item.pct5);
+    const amountStrength = finiteOrNull(item.amount) && medianAmount > 0 ? item.amount / medianAmount : 1;
+    const turnover = finiteOrNull(item.turnover);
+    const breadth = calcBreadth(item);
+    const persistence = classifyPersistence(today, flow3, flow5, flow10, tail.tail30);
+    const opportunity = calcOpportunityScore({ today, flow5, flow10, pct, tail, amountStrength, breadth, maxAbsFlow });
+    const risk = calcRiskScore({ today, flow3, flow5, pct, pct5, tail, amountStrength, turnover, breadth });
+    return {
+      ...item,
+      today,
+      flow3,
+      flow5,
+      flow10,
+      pct,
+      pct5,
+      amountStrength,
+      turnover,
+      breadth,
+      tail,
+      persistence,
+      opportunity,
+      risk,
+      advice: makeAdvice(opportunity, risk, persistence, tail)
+    };
+  });
+}
+
+function renderPersistence(metrics, data) {
+  const rows = [...metrics]
+    .filter((item) => item.today > 0 || finiteOrZero(item.flow5) > 0 || finiteOrZero(item.flow10) > 0)
+    .sort((a, b) => b.opportunity - a.opportunity)
+    .slice(0, 6)
+    .map(
+      (item) => `
+        <div class="decision-row persistence-row">
+          <div class="decision-name">${escapeHtml(item.name)}</div>
+          <div class="${toneClass(item.today)}">${escapeHtml(formatMoney(item.today, data))}</div>
+          <div class="${toneClass(item.flow3)}">${escapeHtml(formatMoney(item.flow3, data))}</div>
+          <div class="${toneClass(item.flow5)}">${escapeHtml(formatOptionalMoney(item.flow5, data))}</div>
+          <div class="${toneClass(item.flow10)}">${escapeHtml(formatOptionalMoney(item.flow10, data))}</div>
+          <div><span class="status-pill ${item.persistence.tone}">${escapeHtml(item.persistence.label)}</span></div>
+        </div>
+      `
+    )
+    .join("");
+
+  return `
+    <div class="decision-table persistence-table">
+      <div class="decision-row decision-table-head">
+        <div>板块</div><div>今日</div><div>近3日估</div><div>5日</div><div>10日</div><div>资金状态</div>
+      </div>
+      ${rows || `<div class="decision-empty">暂无持续流入板块</div>`}
+    </div>
+    <div class="decision-note">5日/10日使用东方财富资金字段；近3日为短期估算，用于观察连续性。</div>
+  `;
+}
+
+function renderHeatRadar(metrics, data) {
+  const rows = HEAT_DIRECTIONS.map((direction) => buildHeatDirection(direction, metrics, data))
+    .sort((a, b) => b.heatScore - a.heatScore)
+    .map(
+      (row) => `
+        <div class="decision-row heat-row">
+          <div class="decision-name">${escapeHtml(row.label)}</div>
+          <div class="${toneClass(row.today)}">${escapeHtml(formatOptionalMoney(row.today, data))}</div>
+          <div class="${toneClass(row.flow5)}">${escapeHtml(formatOptionalMoney(row.flow5, data))}</div>
+          <div class="${toneClass(row.pct)}">${escapeHtml(formatPct(row.pct))}</div>
+          <div class="${toneClass(row.amountChange)}">${escapeHtml(formatSignedPercent(row.amountChange))}</div>
+          <div>
+            <span class="score-pill ${scoreTone(row.heatScore)}">${row.heatScore}</span>
+          </div>
+        </div>
+      `
+    )
+    .join("");
+
+  return `
+    <div class="decision-table heat-table">
+      <div class="decision-row decision-table-head">
+        <div>方向</div><div>今日资金</div><div>5日资金</div><div>涨幅</div><div>成交额强度</div><div>热度</div>
+      </div>
+      ${rows}
+    </div>
+  `;
+}
+
+function renderRiskLights(metrics, data) {
+  const rows = [...metrics]
+    .sort((a, b) => b.risk - a.risk)
+    .slice(0, 6)
+    .map(
+      (item) => `
+        <div class="decision-row risk-row">
+          <div class="decision-name">${escapeHtml(item.name)}</div>
+          <div><span class="score-pill ${scoreTone(item.opportunity)}">${item.opportunity}</span></div>
+          <div><span class="risk-light ${riskTone(item.risk)}"></span>${item.risk}</div>
+          <div class="risk-reason">${escapeHtml(riskReason(item))}</div>
+          <div>${escapeHtml(item.advice)}</div>
+        </div>
+      `
+    )
+    .join("");
+
+  return `
+    <div class="decision-table risk-table">
+      <div class="decision-row decision-table-head">
+        <div>板块</div><div>机会</div><div>风险</div><div>风险点</div><div>建议</div>
+      </div>
+      ${rows}
+    </div>
+  `;
+}
+
+function renderTailFlow(metrics, data) {
+  const rows = [...metrics]
+    .sort((a, b) => Math.abs(b.tail.tail30) - Math.abs(a.tail.tail30))
+    .slice(0, 6)
+    .map(
+      (item) => `
+        <div class="decision-row tail-row">
+          <div class="decision-name">${escapeHtml(item.name)}</div>
+          <div class="${toneClass(item.tail.morning)}">${escapeHtml(formatMoney(item.tail.morning, data))}</div>
+          <div class="${toneClass(item.tail.afternoon)}">${escapeHtml(formatMoney(item.tail.afternoon, data))}</div>
+          <div class="${toneClass(item.tail.tail30)}">${escapeHtml(formatMoney(item.tail.tail30, data))}</div>
+          <div>${escapeHtml(tailJudgement(item.tail))}</div>
+        </div>
+      `
+    )
+    .join("");
+
+  return `
+    <div class="decision-table tail-table">
+      <div class="decision-row decision-table-head">
+        <div>板块</div><div>上午净流</div><div>下午净流</div><div>尾盘30分</div><div>判断</div>
+      </div>
+      ${rows}
+    </div>
+  `;
+}
+
+function renderNextChecklist(metrics) {
+  const focus = [...metrics]
+    .filter((item) => item.opportunity >= 68 && item.risk < 78)
+    .sort((a, b) => b.opportunity - a.opportunity)
+    .slice(0, 4);
+  const avoid = [...metrics].filter((item) => item.risk >= 72).sort((a, b) => b.risk - a.risk).slice(0, 4);
+  const lowWatch = [...metrics]
+    .filter((item) => item.today < 0 && item.tail.tail30 > 0)
+    .sort((a, b) => b.tail.tail30 - a.tail.tail30)
+    .slice(0, 4);
+  const key = focus[0]
+    ? `${focus[0].name} 是否继续放量；${avoid[0]?.name || "高位板块"} 是否降温。`
+    : "观察强势板块能否继续放量，回避尾盘流出且风险高的方向。";
+
+  return `
+    <div class="checklist-grid">
+      ${checklistCard("重点观察", focus, "observe")}
+      ${checklistCard("不宜追高", avoid, "avoid")}
+      ${checklistCard("低位观察", lowWatch, "low")}
+      <div class="checklist-card key-card">
+        <div class="checklist-title">关键判断</div>
+        <div class="checklist-text">${escapeHtml(key)}</div>
+      </div>
+    </div>
+  `;
+}
+
+function checklistCard(title, items, tone) {
+  const body = items.length
+    ? items.map((item) => `<span class="check-chip ${tone}">${escapeHtml(item.name)}</span>`).join("")
+    : `<span class="check-empty">暂无</span>`;
+  return `
+    <div class="checklist-card">
+      <div class="checklist-title">${escapeHtml(title)}</div>
+      <div class="check-chip-row">${body}</div>
+    </div>
+  `;
+}
+
+function buildHeatDirection(direction, metrics) {
+  const matched = metrics.filter((item) => {
+    const text = `${item.name} ${item.rawName || ""}`.toUpperCase();
+    return direction.keywords.some((keyword) => text.includes(String(keyword).toUpperCase()));
+  });
+  if (!matched.length) {
+    return {
+      label: direction.label,
+      today: null,
+      flow5: null,
+      pct: null,
+      amountChange: null,
+      heatScore: 0
+    };
+  }
+  const amountTotal = matched.reduce((sum, item) => sum + finiteOrZero(item.amount), 0);
+  const weightedPct = amountTotal
+    ? matched.reduce((sum, item) => sum + finiteOrZero(item.pct) * finiteOrZero(item.amount), 0) / amountTotal
+    : average(matched.map((item) => item.pct));
+  const today = matched.reduce((sum, item) => sum + item.today, 0);
+  const flow5 = matched.reduce((sum, item) => sum + finiteOrZero(item.flow5), 0);
+  const amountStrength = average(matched.map((item) => item.amountStrength));
+  const opportunity = average(matched.map((item) => item.opportunity));
+  const heatScore = Math.round(clip(opportunity + Math.max(0, weightedPct || 0) * 2 + Math.max(0, amountStrength - 1) * 8, 0, 99));
+  return {
+    label: direction.label,
+    today,
+    flow5,
+    pct: weightedPct,
+    amountChange: Number.isFinite(amountStrength) ? (amountStrength - 1) * 100 : null,
+    heatScore
+  };
+}
+
+function calcIntradaySegments(points) {
+  const sorted = [...(points || [])].filter((point) => Number.isFinite(point.t)).sort((a, b) => a.t - b.t);
+  if (!sorted.length) {
+    return { morning: 0, afternoon: 0, tail30: 0, last: 0 };
+  }
+  const last = sorted.at(-1);
+  const morningCut = sessionCutoff(last.t, 11, 30);
+  const afternoonCut = sessionCutoff(last.t, 13, 0);
+  const morningPoint = pointAtOrBefore(sorted, morningCut) || sorted[0];
+  const afternoonBase = pointAtOrBefore(sorted, afternoonCut) || morningPoint;
+  const tailBase = pointAtOrBefore(sorted, last.t - 30 * 60 * 1000) || sorted[0];
+  return {
+    morning: finiteOrZero(morningPoint.value),
+    afternoon: finiteOrZero(last.value) - finiteOrZero(afternoonBase.value),
+    tail30: finiteOrZero(last.value) - finiteOrZero(tailBase.value),
+    last: finiteOrZero(last.value)
+  };
+}
+
+function sessionCutoff(t, hour, minute) {
+  const date = new Date(t);
+  date.setHours(hour, minute, 0, 0);
+  return date.getTime();
+}
+
+function pointAtOrBefore(points, t) {
+  let candidate = null;
+  for (const point of points) {
+    if (point.t <= t) candidate = point;
+    else break;
+  }
+  return candidate;
+}
+
+function estimateThreeDayFlow(item, flow5) {
+  const today = finiteOrZero(item.value);
+  if (Number.isFinite(flow5)) {
+    return today + (flow5 - today) * 0.5;
+  }
+  return today;
+}
+
+function calcBreadth(item) {
+  const up = finiteOrZero(item.upCount);
+  const down = finiteOrZero(item.downCount);
+  const total = up + down;
+  return total ? up / total : 0.5;
+}
+
+function classifyPersistence(today, flow3, flow5, flow10, tail30) {
+  if (today > 0 && finiteOrZero(flow5) > 0 && finiteOrZero(flow10) > 0) {
+    return { label: "持续流入", tone: "positive" };
+  }
+  if (today > 0 && finiteOrZero(flow5) <= 0) {
+    return { label: "今日突发", tone: "warn" };
+  }
+  if (today > 0 && finiteOrZero(flow3) > 0 && tail30 > 0) {
+    return { label: "趋势延续", tone: "positive" };
+  }
+  if (today < 0 && finiteOrZero(flow5) < 0) {
+    return { label: "持续流出", tone: "negative" };
+  }
+  if (today > 0 && finiteOrZero(flow10) < 0) {
+    return { label: "反弹观察", tone: "warn" };
+  }
+  return { label: "资金分歧", tone: "neutral" };
+}
+
+function calcOpportunityScore(input) {
+  const flowScore = (input.today / input.maxAbsFlow) * 24;
+  const flow5Score = (finiteOrZero(input.flow5) / input.maxAbsFlow) * 18;
+  const flow10Score = (finiteOrZero(input.flow10) / input.maxAbsFlow) * 10;
+  const pctScore = clip(finiteOrZero(input.pct), -6, 6) * 2.2;
+  const tailScore = clip(input.tail.tail30 / Math.max(Math.abs(input.today) * 0.25, 1e8), -1, 1) * 10;
+  const activityScore = clip(input.amountStrength - 1, -1, 2) * 6;
+  const breadthScore = (input.breadth - 0.5) * 18;
+  return Math.round(clip(50 + flowScore + flow5Score + flow10Score + pctScore + tailScore + activityScore + breadthScore, 0, 99));
+}
+
+function calcRiskScore(input) {
+  const chase = Math.max(0, finiteOrZero(input.pct) - 5) * 8 + Math.max(0, finiteOrZero(input.pct5) - 10) * 3;
+  const hotAmount = Math.max(0, input.amountStrength - 2) * 14;
+  const divergence = input.today < 0 && finiteOrZero(input.pct) > 0 ? 18 : 0;
+  const tailOut = input.tail.tail30 < -Math.max(Math.abs(input.today) * 0.12, 1e8) ? 14 : 0;
+  const crowded = input.breadth > 0.86 || finiteOrZero(input.turnover) > 8 ? 8 : 0;
+  const highFlowReversal = input.today > 0 && finiteOrZero(input.flow5) < 0 ? 8 : 0;
+  return Math.round(clip(28 + chase + hotAmount + divergence + tailOut + crowded + highFlowReversal, 0, 99));
+}
+
+function makeAdvice(opportunity, risk, persistence, tail) {
+  if (risk >= 78) return "短期回避";
+  if (opportunity >= 76 && risk < 65 && tail.tail30 >= 0) return "强势跟踪";
+  if (persistence.tone === "positive" && risk < 72) return "回踩观察";
+  if (tail.tail30 < 0) return "等承接";
+  return "观察确认";
+}
+
+function riskReason(item) {
+  if (item.risk >= 78 && finiteOrZero(item.pct) > 5) return "追高风险";
+  if (item.amountStrength > 2.2) return "成交过热";
+  if (item.today < 0 && finiteOrZero(item.pct) > 0) return "资金背离";
+  if (item.tail.tail30 < 0) return "尾盘流出";
+  if (item.breadth > 0.86) return "板块拥挤";
+  return "正常波动";
+}
+
+function tailJudgement(tail) {
+  if (tail.morning > 0 && tail.afternoon > 0 && tail.tail30 >= 0) return "全天强";
+  if (tail.morning > 0 && tail.afternoon > 0 && tail.tail30 < 0) return "上午强，尾盘弱";
+  if (tail.morning <= 0 && tail.afternoon > 0 && tail.tail30 > 0) return "下午回流";
+  if (tail.morning < 0 && tail.afternoon < 0) return "全天弱";
+  if (tail.tail30 > 0) return "尾盘承接";
+  return "尾盘偏弱";
+}
+
+function finiteOrNull(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
+function finiteOrZero(value) {
+  return Number.isFinite(value) ? value : 0;
+}
+
+function average(values) {
+  const finite = values.filter(Number.isFinite);
+  if (!finite.length) return null;
+  return finite.reduce((sum, value) => sum + value, 0) / finite.length;
+}
+
+function clip(value, min, max) {
+  return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
+}
+
+function toneClass(value) {
+  if (!Number.isFinite(value) || value === 0) return "muted";
+  return value > 0 ? "red" : "green";
+}
+
+function scoreTone(score) {
+  if (score >= 75) return "hot";
+  if (score >= 55) return "warm";
+  return "cool";
+}
+
+function riskTone(score) {
+  if (score >= 75) return "red";
+  if (score >= 55) return "yellow";
+  return "green";
+}
+
+function formatOptionalMoney(value, data) {
+  return Number.isFinite(value) ? formatMoney(value, data) : "--";
+}
+
+function formatSignedPercent(value) {
+  if (!Number.isFinite(value)) return "--";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(0)}%`;
 }
 
 function renderRank() {
@@ -1621,6 +2236,22 @@ function formatDateTime(value) {
   const minute = String(date.getMinutes()).padStart(2, "0");
   const second = String(date.getSeconds()).padStart(2, "0");
   return `${month}-${day} ${hour}:${minute}:${second}`;
+}
+
+function formatRelativeTime(value) {
+  if (!value) return "--";
+  const date = new Date(value);
+  const timestamp = date.getTime();
+  if (!Number.isFinite(timestamp)) return "--";
+  const diffMs = Date.now() - timestamp;
+  const absMs = Math.abs(diffMs);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (absMs < minute) return "刚刚";
+  if (absMs < hour) return `${Math.max(1, Math.round(absMs / minute))}分钟前`;
+  if (absMs < day) return `${Math.round(absMs / hour)}小时前`;
+  return formatDateTime(value);
 }
 
 function formatTime(value) {
