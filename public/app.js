@@ -266,6 +266,7 @@ function jsonpFetch(base, params = {}, timeoutMs = 12000) {
       finish(resolve, payload);
     };
     script.onerror = () => finish(reject, new Error("JSONP network error"));
+    script.referrerPolicy = "no-referrer";
     script.src = url.href;
     document.head.appendChild(script);
   });
